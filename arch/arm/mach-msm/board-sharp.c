@@ -128,6 +128,17 @@
 	#include <sharp/shcts_dev.h>
 #endif /* CONFIG_CAPACITIVE_TOUCH_SENSOR_SHCTS */
 
+#ifdef CONFIG_ANDROID_PERSISTENT_RAM
+#include <linux/persistent_ram.h>
+#define MSM_PERSISTENT_RAM_SIZE	(256 * SZ_1K)
+
+#ifdef CONFIG_ANDROID_RAM_CONSOLE
+#include <linux/platform_data/ram_console.h>
+#define MSM_RAM_CONSOLE_SIZE	(128 * SZ_1K)
+#endif /* CONFIG_ANDROID_RAM_CONSOLE */
+
+#endif /* CONFIG_ANDROID_PERSISTENT_RAM */
+
 #define MSM_PMEM_ADSP_SIZE         0x7800000
 #define MSM_PMEM_AUDIO_SIZE        0x4CF000
 #ifdef CONFIG_FB_MSM_HDMI_AS_PRIMARY
@@ -181,6 +192,61 @@
 #define PCIE_WAKE_N_PMIC_GPIO 12
 #define PCIE_PWR_EN_PMIC_GPIO 13
 #define PCIE_RST_N_PMIC_MPP 1
+
+#ifdef CONFIG_ANDROID_PERSISTENT_RAM
+static struct persistent_ram_descriptor pram_descs[] = {
+#ifdef CONFIG_ANDROID_RAM_CONSOLE
+	{
+		.name = "ram_console",
+		.size = MSM_RAM_CONSOLE_SIZE,
+	},
+#endif /* CONFIG_ANDROID_RAM_CONSOLE */
+};
+
+static struct persistent_ram msm_persistent_ram = {
+	.size = MSM_PERSISTENT_RAM_SIZE,
+	.num_descs = ARRAY_SIZE(pram_descs),
+	.descs = pram_descs,
+};
+
+void __init add_persistent_ram(void)
+{
+	struct persistent_ram *pram = &msm_persistent_ram;
+	struct membank* bank = &meminfo.bank[0];
+	pram->start = bank->start + bank->size - MSM_PERSISTENT_RAM_SIZE;
+	persistent_ram_early_init(pram);
+}
+#endif /* CONFIG_ANDROID_PERSISTENT_RAM */
+
+#ifdef CONFIG_ANDROID_RAM_CONSOLE
+static char bootreason[128] = {0,};
+int __init msm_boot_reason(char *s)
+{
+	int n;
+	if (*s == '=')
+		s++;
+	n = snprintf(bootreason, sizeof(bootreason),
+		 "Boot info:\n"
+		 "Last boot reason: %s\n", s);
+	bootreason[n] = '\0';
+	return 1;
+}
+__setup("bootreason", msm_boot_reason);
+struct ram_console_platform_data ram_console_pdata = {
+	.bootinfo = bootreason,
+};
+static struct platform_device ram_console_device = {
+	.name = "ram_console",
+	.id = -1,
+	.dev = {
+		.platform_data = &ram_console_pdata,
+	}
+};
+void __init add_ram_console_devices(void)
+{
+	platform_device_register(&ram_console_device);
+}
+#endif /* CONFIG_ANDROID_RAM_CONSOLE */
 
 #ifdef CONFIG_KERNEL_MSM_CONTIG_MEM_REGION
 static unsigned msm_contig_mem_size = MSM_CONTIG_MEM_SIZE;
@@ -769,6 +835,10 @@ static void __init apq8064_reserve(void)
 	apq8064_set_display_params(prim_panel_name, ext_panel_name,
 		ext_resolution);
 	msm_reserve();
+
+#ifdef CONFIG_ANDROID_PERSISTENT_RAM
+	add_persistent_ram();
+#endif
 }
 
 static void __init apq8064_early_reserve(void)
@@ -4161,6 +4231,9 @@ static void __init apq8064_cdp_init(void)
 			cyttsp_pdata.sleep_gpio = CYTTSP_TS_GPIO_SLEEP_ALT;
 #endif	/* !defined(CONFIG_SHSYS_CUST) */
 	apq8064_common_init();
+#ifdef CONFIG_ANDROID_RAM_CONSOLE
+	add_ram_console_devices();
+#endif
 	if (machine_is_mpq8064_cdp() || machine_is_mpq8064_hrd() ||
 		machine_is_mpq8064_dtv()) {
 		enable_avc_i2c_bus();

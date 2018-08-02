@@ -70,6 +70,7 @@ static int __devinit ram_console_probe(struct platform_device *pdev)
 	ram_console.data = prz;
 
 	register_console(&ram_console);
+	console_verbose();
 
 	return 0;
 }
