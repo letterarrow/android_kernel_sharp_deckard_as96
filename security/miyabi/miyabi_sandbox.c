@@ -44,7 +44,7 @@ struct miyabi_allow_deny
 /* -------------------------------------------------------------------- */
 static const struct miyabi_allow_deny miyabi_allow_deny_list[] =
 {
-#include "miyabi_sandbox.lst"
+#include "miyabi_sandbox.conf"
 };
 /* -------------------------------------------------------------------- */
 int miyabi_sandbox_dentry_open(struct file *file, const struct cred *cred, uint32_t direction)
