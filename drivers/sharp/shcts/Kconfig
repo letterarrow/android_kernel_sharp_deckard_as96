@@ -1,0 +1,13 @@
+#
+# Sharp Capacitive Touch Sensor configuration
+#
+
+menu "SHCTS driver"
+
+comment "SHARP Capacitive Touch Sensor device drivers"
+
+config CAPACITIVE_TOUCH_SENSOR_SHCTS
+	bool "SHARP Capacitive Touch Sensor"
+	default n
+
+endmenu

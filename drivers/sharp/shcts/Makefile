@@ -1,0 +1,1 @@
+obj-$(CONFIG_CAPACITIVE_TOUCH_SENSOR_SHCTS) += shcts_kerl.o

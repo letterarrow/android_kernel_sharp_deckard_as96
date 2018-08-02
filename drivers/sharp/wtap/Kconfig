@@ -1,0 +1,13 @@
+#
+# W-Ta; device configuration
+#
+# drivers/sharp/wtap/Kconfig
+
+menu "W-Tap Configuration"
+
+config SENSORS_WTAP
+	tristate "W-Tap Sensor Driver"
+	default n
+
+endmenu
+

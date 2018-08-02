@@ -1,0 +1,31 @@
+#
+# audio device configuration
+#
+# CONFIG_SH_AUDIO_DRIVER newly created 03-004 03-007 03-012 03-014
+
+menu "SHARP audio driver"
+
+comment "SHARP audio drivers"
+
+config SH_AUDIO_DRIVER_MODEL_NUMBER
+	int "SH_AUDIO_DRIVER_MODEL_NUMBER"
+	range 0 999
+	default "0"
+
+config SH_AUDIO_DRIVER
+	tristate "SHARP Audio Driver customized"
+	default y
+
+config SHSPAMP_YDA168B
+	tristate "SHARP spamp yda168b"
+	default y
+
+config SHRECEIVER_LM48560
+	tristate "SHARP receiver lm48560"
+	default n
+
+config SHFMTX_SI4710
+	tristate "SHARP shfmtx si4710"
+	default n
+
+endmenu

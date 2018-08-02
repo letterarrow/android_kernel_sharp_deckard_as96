@@ -1,0 +1,27 @@
+#
+# SHMHL device configuration
+#
+menu "SHMHL driver"
+comment "SHARP MHL device drivers"
+
+config SII8334_MHL_TX
+	bool "Sharp MHL Driver"
+	default n
+	help
+	  SHMHL Support.
+
+config SII8334_MHL_TX_WITH_SWIC
+	bool "Sharp MHL Driver with SWIC"
+	depends on SII8334_MHL_TX
+	default n
+	help
+	  SHMHL with SWIC Support.
+
+config SII8334_MHL_TX_DEBUGBOARD_SETTING_TYPE1
+	bool "Sharp MHL Driver Debugboard Setting Type1"
+	depends on SII8334_MHL_TX
+	default n
+	help
+	  SHMHL Debugboard Setting Type1.
+
+endmenu

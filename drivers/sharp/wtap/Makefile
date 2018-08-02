@@ -1,0 +1,1 @@
+obj-$(CONFIG_SENSORS_WTAP) += wtap_kerl.o

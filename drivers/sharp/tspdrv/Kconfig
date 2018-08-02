@@ -1,0 +1,20 @@
+menu "TouchSense driver support"
+
+config TSPDRV
+	tristate "TouchSense driver support"
+	default n
+
+config SCTSPDRV
+	depends on TSPDRV
+	bool "Sc tspdrv"
+	default y
+	help
+	  Say Y here if you want to enable the tspdrv for the SC customize.
+
+config TSPDRV_MODEL_TYPE
+	int "TSPDRV MODEL TYPE"
+	depends on TSPDRV
+	range 0 5
+	default "0"
+
+endmenu

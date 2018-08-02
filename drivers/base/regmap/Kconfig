@@ -1,0 +1,25 @@
+# Generic register map support.  There are no user servicable options here,
+# this is an API intended to be used by other kernel subsystems.  These
+# subsystems should select the appropriate symbols.
+
+config REGMAP
+#CONFIG_SH_AUDIO_DRIVER-> 03-001
+#	default y if (REGMAP_I2C || REGMAP_SPI)
+	default y if (REGMAP_I2C || REGMAP_SPI || REGMAP_SLIMBUS)
+#CONFIG_SH_AUDIO_DRIVER<- 03-001
+	select LZO_COMPRESS
+	select LZO_DECOMPRESS
+	bool
+
+config REGMAP_I2C
+	tristate
+
+config REGMAP_SPI
+	tristate
+#CONFIG_SH_AUDIO_DRIVER-> 03-001
+config REGMAP_SLIMBUS
+	tristate
+#CONFIG_SH_AUDIO_DRIVER<- 03-001
+
+config REGMAP_IRQ
+	bool

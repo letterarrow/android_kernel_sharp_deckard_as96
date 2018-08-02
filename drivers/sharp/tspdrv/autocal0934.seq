@@ -1,0 +1,26 @@
+/*
+** DRV2604 register settings for autocalibration of SEMCO0934 LRA
+**
+** $Revision: 34917 $
+*/
+
+#ifdef CONFIG_SCTSPDRV
+
+    MODE_REG,                       AUTO_CALIBRATION,
+    RATED_VOLTAGE_REG,              0x53,
+    OVERDRIVE_CLAMP_VOLTAGE_REG,    0x89,
+    FEEDBACK_CONTROL_REG,           0xB7,
+    Control3_REG,                   0x80,
+    AUTOCAL_MEM_INTERFACE_REG,      AUTOCAL_TIME_500MS,
+    GO_REG,                         GO,
+
+#else /* CONFIG_SCTSPDRV */
+
+    MODE_REG,                       AUTO_CALIBRATION,
+    RATED_VOLTAGE_REG,              LRA_RATED_VOLTAGE,
+    OVERDRIVE_CLAMP_VOLTAGE_REG,    LRA_OVERDRIVE_CLAMP_VOLTAGE,
+    FEEDBACK_CONTROL_REG,           FEEDBACK_CONTROL_MODE_LRA | FB_BRAKE_FACTOR_4X | LOOP_RESPONSE_MEDIUM | FEEDBACK_CONTROL_BEMF_LRA_GAIN3,
+    Control3_REG,                   NG_Thresh_2,
+    GO_REG,                         GO,
+
+#endif /* CONFIG_SCTSPDRV */

@@ -1,0 +1,87 @@
+# drivers/sharp/wifi/broadcom/1.61.36/Kconfig
+
+menu "Wi-Fi Configuration"
+
+
+config WIFIPM
+	bool "WLAN Power Management Support"
+	default y
+	---help---
+	  Power management implementation for WLAN Functionality.
+
+config SHWLAN_CFG80211
+	bool "SHARP CFG80211 implementation"
+	depends on WIFIPM = y && CFG80211 = y
+	default y
+	select WEXT_CORE
+	select WEXT_PROC
+	---help---
+	  Enable WiFi related config specific to SHARP CFG80211 implementation.
+
+#config SHWLAN_WEXT
+#	bool "SHARP WEXT implementation"
+#	depends on WIFIPM = y && CFG80211 = n
+#	select WIRELESS_EXT
+#	select WEXT_PRIV
+#	---help---
+#	  Enable WiFi related config specific to SHARP WEXT implementation.
+
+
+##config SHWLAN_BCM4335_1
+config BCM4335
+	tristate "BCM4335 WiFi device Support"
+	default y
+	---help---
+	  Enable BCM4335 WiFi device driver.
+
+
+#config BCMDHD_NVRAM_PATH
+##	depends on SHWLAN_BCM4335_1
+#	depends on BCM4335
+#	string "NVRAM path"
+#	default "/system/etc/firmware/bcm/nvram_bcm4335.txt"
+#	---help---
+#	  Path to the calibration file.
+
+config SHWLAN_RSSI_OFFSET
+	int "WLAN RSSI Offset value"
+	range -20 20
+	default 0
+	help
+	  RSSI Offset for WLAN.
+	  Examples:
+	    Actual RSSI:-40dBm + SH_RSSI_OFFSET:0    => -40dBm
+	    Actual RSSI:-40dBm + SH_RSSI_OFFSET:-20  => -60dBm
+	    Actual RSSI:-40dBm + SH_RSSI_OFFSET:20   => -20dBm
+
+config SHWLAN_BEACON_TIMEOUT
+	int "WLAN BEACON TIMEOUT value"
+	range 0 20
+	default 0
+	help
+	  Beacon timeout setting for WLAN.
+	  A value of 0 means do not reflecting this setting.
+
+config SHWLAN_NVRAM_BTC_PARAM6
+	int "WLAN nvram btc_params6 value"
+	range 0 99
+	default 0
+	help
+	  nvram parameter
+
+config SHWLAN_DISABLE_11AC
+   bool "Disable IEEE 802.11ac Support"
+   default y
+   help
+     Disable IEEE 802.11ac
+
+config SHWLAN_COUNTRY_CODE_HANDLING
+  bool "Enable country code handling"
+  default n
+  help
+    country code handling
+
+source "drivers/sharp/wifi/broadcom/1.61.36/Kconfig"
+
+
+endmenu

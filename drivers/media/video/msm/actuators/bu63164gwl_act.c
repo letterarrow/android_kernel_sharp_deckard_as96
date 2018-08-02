@@ -1,0 +1,2035 @@
+/* Copyright (c) 2011, Code Aurora Forum. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ */
+
+#include <linux/module.h>
+#include "msm_actuator.h"
+#include <linux/debugfs.h>
+#include <linux/gpio.h>
+#include <mach/gpio.h>
+#include <mach/board.h>
+#include <mach/gpiomux.h>
+#include <sharp/sh_smem.h>
+
+#define BU63164GWL_TOTAL_STEPS_NEAR_TO_FAR_MAX		40
+
+int32_t bu63164gwl_actuator_write_focus(
+	struct msm_actuator_ctrl_t *a_ctrl,
+	uint16_t curr_lens_pos,
+	struct damping_params_t *damping_params,
+	int8_t sign_direction,
+	int16_t code_boundary);
+
+int32_t bu63164gwl_actuator_parse_i2c_params(struct msm_actuator_ctrl_t *a_ctrl,
+	int16_t next_lens_position, uint32_t hw_params, uint16_t delay);
+
+int32_t bu63164gwl_actuator_init_step_table(struct msm_actuator_ctrl_t *a_ctrl,
+	struct msm_actuator_set_info_t *set_info);
+
+int32_t bu63164gwl_actuator_move_focus(
+	struct msm_actuator_ctrl_t *a_ctrl,
+	struct msm_actuator_move_params_t *move_params);
+
+int32_t bu63164gwl_actuator_set_default_focus(
+	struct msm_actuator_ctrl_t *a_ctrl,
+	struct msm_actuator_move_params_t *move_params);
+
+int32_t bu63164gwl_actuator_init_focus(struct msm_actuator_ctrl_t *a_ctrl,
+	uint16_t size, enum msm_actuator_data_type type,
+	struct reg_settings_t *settings);
+
+int32_t bu63164gwl_actuator_set_ois_init(void);
+int32_t bu63164gwl_actuator_set_ois_still(void);
+int32_t bu63164gwl_actuator_set_ois_video(void);
+int32_t bu63164gwl_actuator_set_ois_off(void);
+int32_t bu63164gwl_actuator_set_hall_offset_still(void);
+int32_t bu63164gwl_actuator_set_hall_offset_video_16_9(void);
+int32_t bu63164gwl_actuator_set_hall_offset_video_4_3(void);
+
+static int16_t virtual_vcm_dreg = 0;
+
+static struct msm_actuator_ctrl_t bu63164gwl_act_t;
+
+static struct msm_actuator bu63164gwl_vcm_actuator_table = {
+	.act_type = ACTUATOR_VCM,
+	.func_tbl = {
+		.actuator_init_step_table = bu63164gwl_actuator_init_step_table,
+		.actuator_move_focus = bu63164gwl_actuator_move_focus,
+		.actuator_write_focus = bu63164gwl_actuator_write_focus,
+		.actuator_set_default_focus = bu63164gwl_actuator_set_default_focus,
+		.actuator_init_focus = bu63164gwl_actuator_init_focus,
+		.actuator_parse_i2c_params = bu63164gwl_actuator_parse_i2c_params,
+	},
+};
+
+static struct msm_actuator *actuators[] = {
+	&bu63164gwl_vcm_actuator_table,
+};
+
+static struct ois_info_t bu63164gwl_ois_parameter;
+
+#define BU63164GWL_OIS_CMD_PER	0x82
+#define BU63164GWL_OIS_CMD_MEM	0x84
+#define BU63164GWL_OIS_CMD_SPE	0x8C
+
+struct bu63164gwl_ois_reg_conf {
+	uint8_t type;
+	uint8_t addr;
+	uint16_t data;
+};
+
+static struct bu63164gwl_ois_reg_conf ois_init_setting1[] = {
+  /* AF par1 */
+  {BU63164GWL_OIS_CMD_MEM, 0xD4, 0x55C3},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xD5, 0x6000},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xD6, 0x7FFF},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xD7, 0x7FFF},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xD8, 0x7FFF},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xD9, 0x7FFF},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xDA, 0x7FFF},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xDB, 0x7FFF},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xDC, 0x7FFF},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xDD, 0x7FFF},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xDE, 0x7FFF},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xDF, 0x7FFF},     /*                          */
+  /* BU63160GWL to BU63164GWL Additional Command */
+  {BU63164GWL_OIS_CMD_PER, 0x20, 0x3333},     /*                          */
+  {BU63164GWL_OIS_CMD_PER, 0x21, 0x1111},     /*                          */
+  {BU63164GWL_OIS_CMD_PER, 0x22, 0x0307},     /*                          */
+  /* SystemCLK par1 */
+  {BU63164GWL_OIS_CMD_PER, 0x62, 0x010D},     /*                          */
+  {BU63164GWL_OIS_CMD_PER, 0x63, 0x0437},     /*                          */
+  {BU63164GWL_OIS_CMD_PER, 0x64, 0x4060},     /*                          */
+  {BU63164GWL_OIS_CMD_PER, 0x60, 0x3011},     /*                          */
+  {BU63164GWL_OIS_CMD_PER, 0x65, 0x0080},     /*                          */
+  {BU63164GWL_OIS_CMD_PER, 0x61, 0x8002},     /*                          */
+  {BU63164GWL_OIS_CMD_PER, 0x61, 0x8003},     /*                          */
+  {BU63164GWL_OIS_CMD_PER, 0x61, 0x8809},     /*                          */
+};
+
+static struct bu63164gwl_ois_reg_conf ois_init_setting2[] = {
+  /* SystemCLK par2 */
+  {BU63164GWL_OIS_CMD_PER, 0x05, 0x000C},     /*                          */
+  {BU63164GWL_OIS_CMD_PER, 0x05, 0x000D},     /*                          */
+  /* GYRO par1 */
+  {BU63164GWL_OIS_CMD_MEM, 0xD0, 0x004A},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xD1, 0x8CC2},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xD2, 0x3467},     /*                          */
+  /* GYRO par2 */
+  {BU63164GWL_OIS_CMD_MEM, 0xD3, 0x9800},     /*                          */
+  /* Special command */
+  {BU63164GWL_OIS_CMD_SPE, 0x01, 0x0000},     /*                          */
+  /* AF par2 */
+  {BU63164GWL_OIS_CMD_MEM, 0xD0, 0x7FDF},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xD1, 0x6000},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xD2, 0x199A},     /*                          */
+  {BU63164GWL_OIS_CMD_MEM, 0xD3, 0x2B85},     /*                          */
+};
+
+struct bu63164gwl_ois_reg_conf ois_calibration_setting[] = {
+  /* Product line calibration value setting */
+  {BU63164GWL_OIS_CMD_PER, 0x30, 0x0000},     /* ADC_CH0                  */
+  {BU63164GWL_OIS_CMD_MEM, 0x1E, 0x0000},     /* X_H_ofs                  */
+  {BU63164GWL_OIS_CMD_MEM, 0x9E, 0x0000},     /* Y_H_ofs                  */
+  {BU63164GWL_OIS_CMD_PER, 0x39, 0x0000},     /* Ch3_VAL_1                */
+  {BU63164GWL_OIS_CMD_PER, 0x3B, 0x0000},     /* Ch3_VAL_3                */
+  {BU63164GWL_OIS_CMD_MEM, 0x06, 0x0000},     /* Kgx00                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x86, 0x0000},     /* Kgy00                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x46, 0x0000},     /* KgxHG                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xC6, 0x0000},     /* KgyHG                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x0F, 0x0000},     /* KgxG                     */
+  {BU63164GWL_OIS_CMD_MEM, 0x8F, 0x0000},     /* KgyG                     */
+};
+
+static struct bu63164gwl_ois_reg_conf ois_still_mode_setting[] = {
+  /* Position Servo ON */
+  {BU63164GWL_OIS_CMD_MEM, 0x7F, 0x0C0C},     /* EQCTL                    */
+  /* OIS scene parameter setting */
+  {BU63164GWL_OIS_CMD_MEM, 0x10, 0x2000},     /* Kgx09                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x11, 0x7800},     /* Kgx0A                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x12, 0x1000},     /* Kgx0B                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x13, 0x1000},     /* Kgx0C                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x18, 0x2000},     /* Kgx0D                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x19, 0x7800},     /* Kgx0E                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x1A, 0x1000},     /* Kgx0F                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x1B, 0x1000},     /* Kgx10                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x36, 0x7FC0},     /* Kgxdr                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x3A, 0x7470},     /* Kgx13                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x3B, 0xCB90},     /* Kgx14                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x40, 0x1B80},     /* X_LMT                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x43, 0x3E80},     /* X_TGT                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x90, 0x2000},     /* Kgy09                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x91, 0x7800},     /* Kgy0A                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x92, 0x1000},     /* Kgy0B                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x93, 0x1000},     /* Kgy0C                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x98, 0x2000},     /* Kgy0D                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x99, 0x7800},     /* Kgy0E                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x9A, 0x1000},     /* Kgy0F                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x9B, 0x1000},     /* Kgy10                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xB6, 0x7FC0},     /* Kgydr                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xBA, 0x7470},     /* Kgy13                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xBB, 0xCB90},     /* Kgy14                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xC0, 0x1B80},     /* Y_LMT                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xC3, 0x3E80},     /* Y_TGT                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x14, 0x0000},     /* wDgx02                   */
+  {BU63164GWL_OIS_CMD_MEM, 0x1C, 0x0000},     /* wDgx03                   */
+  {BU63164GWL_OIS_CMD_MEM, 0x3E, 0x7FFF},     /* wDgx06                   */
+  {BU63164GWL_OIS_CMD_MEM, 0x3C, 0x0000},     /* Kgx15                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x94, 0x0000},     /* wDgy02                   */
+  {BU63164GWL_OIS_CMD_MEM, 0x9C, 0x0000},     /* wDgy03                   */
+  {BU63164GWL_OIS_CMD_MEM, 0xBE, 0x7FFF},     /* wDgy06                   */
+  {BU63164GWL_OIS_CMD_MEM, 0xBC, 0x0000},     /* Kgy15                    */
+  /* OIS ON */
+  {BU63164GWL_OIS_CMD_MEM, 0x7F, 0x0D0D},     /* EQCTL                    */
+};
+
+static struct bu63164gwl_ois_reg_conf ois_video_16_9_mode_setting[] = {
+  /* Position Servo ON */
+  {BU63164GWL_OIS_CMD_MEM, 0x7F, 0x4C0C},     /* EQCTL                    */
+  /* OIS scene parameter setting */
+  {BU63164GWL_OIS_CMD_MEM, 0x10, 0x4000},     /* Kgx09                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x11, 0x7000},     /* Kgx0A                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x12, 0x1000},     /* Kgx0B                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x13, 0x1000},     /* Kgx0C                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x18, 0x4000},     /* Kgx0D                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x19, 0x7000},     /* Kgx0E                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x1A, 0x1000},     /* Kgx0F                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x1B, 0x1000},     /* Kgx10                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x36, 0x7F40},     /* Kgxdr                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x3A, 0x5900},     /* Kgx13                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x3B, 0xC700},     /* Kgx14                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x40, 0x4B00},     /* X_LMT                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x43, 0x6D60},     /* X_TGT                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x90, 0x4000},     /* Kgy09                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x91, 0x7000},     /* Kgy0A                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x92, 0x1000},     /* Kgy0B                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x93, 0x1000},     /* Kgy0C                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x98, 0x4000},     /* Kgy0D                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x99, 0x7000},     /* Kgy0E                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x9A, 0x1000},     /* Kgy0F                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x9B, 0x1000},     /* Kgy10                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xB6, 0x7F40},     /* Kgydr                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xBA, 0x5900},     /* Kgy13                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xBB, 0xC700},     /* Kgy14                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xC0, 0x4B00},     /* Y_LMT                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xC3, 0x6D60},     /* Y_TGT                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x14, 0x0000},     /* wDgx02                   */
+  {BU63164GWL_OIS_CMD_MEM, 0x1C, 0x0000},     /* wDgx03                   */
+  {BU63164GWL_OIS_CMD_MEM, 0x3E, 0x7FFF},     /* wDgx06                   */
+  {BU63164GWL_OIS_CMD_MEM, 0x3C, 0x0000},     /* Kgx15                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x94, 0x0000},     /* wDgy02                   */
+  {BU63164GWL_OIS_CMD_MEM, 0x9C, 0x0000},     /* wDgy03                   */
+  {BU63164GWL_OIS_CMD_MEM, 0xBE, 0x7FFF},     /* wDgy06                   */
+  {BU63164GWL_OIS_CMD_MEM, 0xBC, 0x0000},     /* Kgy15                    */
+  /* OIS ON */
+  {BU63164GWL_OIS_CMD_MEM, 0x7F, 0x4D0D},     /* EQCTL                    */
+};
+
+static struct bu63164gwl_ois_reg_conf ois_video_4_3_mode_setting[] = {
+  /* Position Servo ON */
+  {BU63164GWL_OIS_CMD_MEM, 0x7F, 0x4C0C},     /* EQCTL                    */
+  /* OIS scene parameter setting */
+  {BU63164GWL_OIS_CMD_MEM, 0x10, 0x4000},     /* Kgx09                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x11, 0x7000},     /* Kgx0A                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x12, 0x1000},     /* Kgx0B                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x13, 0x1000},     /* Kgx0C                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x18, 0x4000},     /* Kgx0D                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x19, 0x7000},     /* Kgx0E                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x1A, 0x1000},     /* Kgx0F                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x1B, 0x1000},     /* Kgx10                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x36, 0x7F40},     /* Kgxdr                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x3A, 0x5900},     /* Kgx13                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x3B, 0xC700},     /* Kgx14                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x40, 0x2800},     /* X_LMT                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x43, 0x6D60},     /* X_TGT                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x90, 0x4000},     /* Kgy09                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x91, 0x7000},     /* Kgy0A                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x92, 0x1000},     /* Kgy0B                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x93, 0x1000},     /* Kgy0C                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x98, 0x4000},     /* Kgy0D                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x99, 0x7000},     /* Kgy0E                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x9A, 0x1000},     /* Kgy0F                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x9B, 0x1000},     /* Kgy10                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xB6, 0x7F40},     /* Kgydr                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xBA, 0x5900},     /* Kgy13                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xBB, 0xC700},     /* Kgy14                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xC0, 0x2800},     /* Y_LMT                    */
+  {BU63164GWL_OIS_CMD_MEM, 0xC3, 0x6D60},     /* Y_TGT                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x14, 0x0000},     /* wDgx02                   */
+  {BU63164GWL_OIS_CMD_MEM, 0x1C, 0x0000},     /* wDgx03                   */
+  {BU63164GWL_OIS_CMD_MEM, 0x3E, 0x7FFF},     /* wDgx06                   */
+  {BU63164GWL_OIS_CMD_MEM, 0x3C, 0x0000},     /* Kgx15                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x94, 0x0000},     /* wDgy02                   */
+  {BU63164GWL_OIS_CMD_MEM, 0x9C, 0x0000},     /* wDgy03                   */
+  {BU63164GWL_OIS_CMD_MEM, 0xBE, 0x7FFF},     /* wDgy06                   */
+  {BU63164GWL_OIS_CMD_MEM, 0xBC, 0x0000},     /* Kgy15                    */
+  /* OIS ON */
+  {BU63164GWL_OIS_CMD_MEM, 0x7F, 0x4D0D},     /* EQCTL                    */
+};
+
+static struct bu63164gwl_ois_reg_conf ois_hall_offset_still_setting[] = {
+  {BU63164GWL_OIS_CMD_PER, 0x31, 0x0000},     /* ADC_CH1                  */
+  {BU63164GWL_OIS_CMD_PER, 0x32, 0x0000},     /* ADC_CH2                  */
+};
+
+static struct bu63164gwl_ois_reg_conf ois_hall_offset_video_16_9_setting[] = {
+  {BU63164GWL_OIS_CMD_PER, 0x31, 0x0000},     /* ADC_CH1                  */
+  {BU63164GWL_OIS_CMD_PER, 0x32, 0x0000},     /* ADC_CH2                  */
+};
+
+static struct bu63164gwl_ois_reg_conf ois_hall_offset_video_4_3_setting[] = {
+  {BU63164GWL_OIS_CMD_PER, 0x31, 0x0000},     /* ADC_CH1                  */
+  {BU63164GWL_OIS_CMD_PER, 0x32, 0x0000},     /* ADC_CH2                  */
+};
+
+static struct bu63164gwl_ois_reg_conf ois_limiter_setting[] = {
+  {BU63164GWL_OIS_CMD_MEM, 0x70, 0x7FFF},     /* X_PEL                    */
+  {BU63164GWL_OIS_CMD_MEM, 0x72, 0x7FFF},     /* Y_PEL                    */
+};
+
+static struct bu63164gwl_ois_reg_conf ois_off_setting[] = {
+  {BU63164GWL_OIS_CMD_MEM, 0x7F, 0x8C0C},     /* EQCTL                    */
+};
+
+static uint8_t bu63164gwl_act_init_fw_settings[] = {
+/* DOWNLOAD_1955d.BIN */
+0x80,0x00,0x9E,0x5D,0x00,0x03,0xEC,0x00,0x00,0x00,0x00,0x00,0x03,0x00,0x90,0x17,
+0x84,0x20,0x0F,0x08,0x80,0x47,0xA0,0x00,0x00,0x11,0x30,0x02,0x07,0x80,0x41,0x90,
+0x50,0x00,0x08,0x40,0xFC,0x90,0x88,0x2F,0x84,0x00,0x00,0x11,0x30,0x02,0x07,0x40,
+0xFF,0x90,0x50,0x00,0x08,0x40,0xFD,0x90,0x40,0x7F,0xA0,0x10,0xFF,0x84,0x20,0x2C,
+0x08,0x7F,0xFF,0x11,0x20,0x0D,0x08,0x80,0x0F,0x90,0x80,0x26,0xA0,0x90,0x2E,0x84,
+0x00,0x20,0x08,0x80,0x1F,0x90,0x90,0x26,0x84,0x20,0x8F,0x08,0x7F,0xFF,0x11,0x80,
+0x1F,0xA0,0x20,0x2E,0x08,0x40,0xED,0x90,0x20,0x0F,0x08,0x80,0x0E,0x90,0x00,0x00,
+0x21,0x30,0x02,0x07,0x40,0xEB,0xA0,0x50,0x00,0x08,0x40,0xFE,0x90,0x40,0x7F,0xA0,
+0x04,0xEB,0x84,0x10,0x00,0x20,0x20,0x0F,0x08,0x80,0x00,0x21,0x60,0x04,0x07,0x40,
+0xFF,0xA0,0x10,0x00,0x08,0x40,0xEA,0x90,0x10,0x00,0x20,0x20,0x0F,0x08,0x80,0x00,
+0x11,0x00,0x0B,0x07,0x08,0x00,0x20,0x60,0x0D,0x07,0x10,0x00,0x08,0x40,0xEA,0x90,
+0x8F,0x06,0x07,0x04,0xFF,0x84,0x20,0x09,0x60,0x90,0x1F,0x84,0x10,0x20,0x08,0x80,
+0x17,0x90,0x90,0x3F,0x84,0x20,0x1E,0x08,0x80,0x46,0xA0,0x10,0x20,0x08,0x80,0x1E,
+0x90,0x20,0x0D,0x08,0x20,0x00,0x11,0x40,0xFF,0xA0,0x10,0xFC,0x84,0x08,0xFD,0x84,
+0x04,0xFE,0x84,0x00,0x03,0x00,0x00,0x10,0x08,0x80,0x37,0xA0,0x90,0x69,0x84,0x00,
+0x10,0x08,0x80,0x69,0xA0,0x20,0x1A,0x08,0x40,0x64,0xA0,0x10,0x60,0x84,0x10,0x10,
+0x08,0x80,0x4F,0xA0,0x20,0x1D,0x08,0x40,0x5F,0xA0,0x20,0x1E,0x08,0x40,0x5D,0xA0,
+0x10,0x00,0x08,0x80,0x68,0x90,0x40,0xFE,0xA0,0x20,0x0F,0x07,0x50,0x00,0x08,0x40,
+0x7F,0xA0,0x04,0xFE,0x84,0x00,0x04,0x00,0x10,0xF0,0x44,0x50,0x00,0x08,0x00,0x7F,
+0x11,0x20,0xF0,0x60,0x04,0x5C,0x84,0x04,0x61,0x84,0x04,0x57,0x84,0x00,0x00,0x21,
+0x04,0x74,0x84,0x00,0x40,0x21,0x00,0x0B,0x07,0x04,0x74,0x84,0x00,0x00,0x21,0x10,
+0x57,0x84,0x30,0x20,0x08,0x00,0x04,0x11,0x50,0x00,0x08,0x03,0xFF,0x11,0x20,0xFA,
+0x60,0x10,0xF0,0x44,0x50,0x20,0x08,0x00,0x7F,0x11,0x60,0x20,0x08,0x40,0x00,0x08,
+0x00,0x08,0x11,0x30,0x1A,0x07,0x50,0x00,0x08,0x07,0x00,0x11,0x9F,0x1D,0x07,0x8B,
+0x1E,0x07,0x9C,0x15,0x07,0x20,0xF8,0x60,0x10,0x28,0x44,0x60,0x00,0x08,0x01,0x00,
+0x11,0x20,0x28,0x60,0x87,0x1B,0x07,0x40,0xF7,0xA0,0x81,0x27,0x07,0x20,0x48,0x60,
+0x10,0x0A,0x44,0x10,0xF4,0x84,0x3B,0x4F,0x00,0xE0,0x14,0x43,0x08,0x00,0x20,0x00,
+0x06,0x07,0x89,0x02,0x07,0x40,0xAE,0x90,0x81,0x04,0x07,0x40,0x2E,0x90,0x40,0x7F,
+0xA0,0x10,0x2E,0x44,0x20,0x2E,0x08,0x7F,0xFF,0x11,0x10,0x20,0x08,0x40,0x00,0x11,
+0x92,0x05,0x07,0x20,0x72,0x60,0x00,0x00,0x08,0x40,0x67,0xA0,0x00,0x00,0x11,0x84,
+0x02,0x07,0x20,0xF0,0x60,0x9F,0x03,0x07,0x40,0x7E,0xA0,0x40,0x65,0x90,0x10,0x62,
+0x84,0x10,0x10,0x08,0x40,0x61,0xA0,0x10,0x60,0x84,0x20,0x1D,0x08,0x40,0x5F,0xA0,
+0x20,0x1E,0x08,0x40,0x5D,0xA0,0x10,0x20,0x08,0x40,0x5E,0x90,0x20,0x0D,0x08,0x20,
+0x30,0x60,0x20,0x00,0x11,0x10,0x7E,0x84,0x00,0x00,0x08,0x00,0x40,0x21,0x8F,0x04,
+0x07,0x40,0x7F,0xA0,0x30,0x06,0x07,0x70,0x10,0x08,0x00,0x80,0x21,0x00,0x07,0x07,
+0x00,0x40,0x21,0x9F,0x0B,0x07,0x40,0x7F,0xA0,0x30,0x05,0x07,0x50,0x00,0x08,0x00,
+0xC0,0x21,0x40,0x7E,0x90,0x10,0xCF,0x84,0x20,0x1C,0x08,0x7F,0xFF,0x21,0x3B,0x87,
+0x00,0xC8,0x14,0x43,0x10,0x00,0x20,0x00,0x00,0x08,0x40,0xB5,0x90,0x40,0xAD,0xA0,
+0x00,0x0A,0x07,0x10,0x4F,0x84,0x20,0x1C,0x08,0x7F,0xFF,0x21,0x3B,0x91,0x00,0x48,
+0x14,0x43,0x10,0x00,0x20,0x00,0x00,0x08,0x40,0x35,0x90,0x40,0x2D,0xA0,0x00,0x14,
+0x07,0x80,0x0C,0x07,0x82,0x03,0x07,0x04,0x50,0x84,0x10,0x00,0x20,0x20,0x02,0x07,
+0x00,0x08,0x21,0x40,0x00,0x08,0x00,0x01,0x11,0x40,0x50,0xA0,0x00,0x04,0x00,0x20,
+0x95,0x00,0x80,0x14,0x43,0x01,0x00,0x01,0x04,0x00,0x11,0x02,0x00,0x21,0xFF,0x36,
+0xC5,0x20,0x9B,0x00,0x00,0x14,0x43,0x00,0x01,0x01,0x00,0x04,0x11,0x00,0x02,0x21,
+0xFF,0x34,0xC5,0x10,0x65,0x84,0x50,0x10,0x08,0x00,0x00,0x21,0x84,0x03,0x07,0x20,
+0xF0,0x60,0x9F,0x03,0x07,0x40,0x7E,0xA0,0x00,0x10,0x08,0x40,0x65,0xA0,0x20,0x0D,
+0x08,0x40,0x64,0x90,0x40,0x62,0xA0,0x00,0x04,0x00,0x04,0x1C,0x44,0x04,0x1B,0x44,
+0x4C,0x00,0x21,0x04,0x6A,0x84,0x40,0x6B,0xA0,0x10,0x7E,0x84,0x50,0x00,0x08,0xFF,
+0x3F,0x21,0x00,0x04,0x00,0x04,0xBC,0x84,0x04,0x9C,0x84,0x04,0x94,0x84,0x04,0x8C,
+0x84,0x04,0x84,0x84,0x04,0x87,0x84,0x04,0x3C,0x84,0x04,0x1C,0x84,0x04,0x14,0x84,
+0x04,0x0C,0x84,0x04,0x04,0x84,0x04,0x07,0x84,0x00,0x00,0x21,0x30,0x0F,0x07,0x70,
+0x10,0x08,0x00,0x80,0x21,0x50,0x00,0x08,0x00,0xC0,0x21,0x00,0x1A,0x07,0x4C,0x02,
+0x21,0x10,0x7E,0x84,0x60,0x10,0x08,0x00,0x80,0x21,0x50,0x00,0x08,0xFF,0x3F,0x21,
+0x40,0x7E,0x90,0x30,0x09,0x07,0x70,0x10,0x08,0x00,0x40,0x21,0x00,0x25,0x07,0xFF,
+0xFF,0x21,0x10,0x42,0x84,0x20,0x1F,0x08,0x20,0x00,0x21,0x20,0x1F,0x08,0x40,0x63,
+0xA0,0x10,0x16,0x84,0x10,0x20,0x08,0x40,0x1D,0x90,0x10,0x07,0x84,0x20,0x2C,0x08,
+0x7F,0xFF,0x11,0x10,0x00,0x08,0x40,0x55,0xA0,0x40,0x06,0x90,0x10,0xC2,0x84,0x20,
+0x1F,0x08,0x20,0x00,0x21,0x20,0x1F,0x08,0x40,0x66,0xA0,0x10,0x96,0x84,0x10,0x20,
+0x08,0x40,0x9D,0x90,0x10,0x87,0x84,0x20,0x2C,0x08,0x7F,0xFF,0x11,0x10,0x20,0x08,
+0x40,0x86,0x90,0x10,0x56,0x84,0x20,0x1F,0x08,0x40,0x7B,0xA0,0x70,0x00,0x08,0x80,
+0x00,0x11,0x22,0x00,0x60,0x40,0x00,0x08,0x40,0x79,0xA0,0x00,0x08,0x11,0x10,0x55,
+0x84,0x20,0x1F,0x08,0x40,0x7A,0xA0,0x70,0x00,0x08,0x80,0x00,0x11,0x22,0x00,0x60,
+0x50,0x00,0x08,0x40,0x79,0xA0,0x00,0xFF,0x11,0x00,0x2E,0x07,0x10,0x6A,0x84,0x10,
+0x00,0x08,0x00,0x01,0x11,0x20,0x05,0x07,0x60,0x00,0x08,0x00,0x00,0x11,0x40,0x6A,
+0xA0,0x30,0x38,0x07,0x50,0x00,0x08,0x00,0xC0,0x21,0x40,0x7E,0x90,0x04,0x6F,0x84,
+0x01,0x00,0x21,0x10,0x7E,0x84,0x60,0x00,0x08,0x04,0x00,0x11,0x40,0x7E,0xA0,0x10,
+0xC1,0x84,0x20,0x0F,0x08,0x70,0x09,0x07,0x10,0x10,0x08,0x40,0xC0,0xA0,0x20,0x0F,
+0x08,0x7F,0xFF,0x11,0x8F,0x02,0x07,0x80,0x00,0x11,0x10,0x00,0x20,0x10,0xC1,0x84,
+0x20,0x0E,0x08,0x7F,0xFF,0x21,0x40,0xBD,0x90,0x8E,0x02,0x07,0x40,0x7F,0xA0,0x40,
+0xEC,0x90,0x04,0x6E,0x84,0x01,0x00,0x21,0x10,0x7E,0x84,0x60,0x00,0x08,0x00,0x04,
+0x11,0x40,0x7E,0xA0,0x10,0x41,0x84,0x20,0x0F,0x08,0x70,0x09,0x07,0x10,0x10,0x08,
+0x40,0x40,0xA0,0x20,0x0F,0x08,0x7F,0xFF,0x11,0x8F,0x02,0x07,0x80,0x00,0x11,0x10,
+0x00,0x20,0x10,0x41,0x84,0x20,0x0E,0x08,0x7F,0xFF,0x21,0x40,0x3D,0x90,0x8E,0x02,
+0x07,0x40,0x7F,0xA0,0x40,0x6D,0x90,0x10,0x2D,0x44,0x21,0x28,0x00,0x08,0x00,0x11,
+0x10,0x00,0x20,0x20,0x0D,0x08,0x20,0x00,0x11,0x20,0x32,0x60,0x80,0x14,0x43,0x10,
+0x2C,0x44,0x21,0x30,0x00,0x00,0x08,0x11,0x10,0x00,0x20,0x20,0x0D,0x08,0x20,0x00,
+0x11,0x20,0x31,0x60,0x00,0x14,0x43,0x04,0x34,0x44,0x40,0x5B,0xA0,0x00,0x04,0x00,
+0x10,0x7E,0x84,0x60,0x20,0x08,0x80,0x00,0x11,0x50,0x00,0x08,0x3F,0xFF,0x11,0x40,
+0x7E,0xA0,0x08,0xE8,0x84,0x20,0x32,0x50,0x08,0x68,0x84,0x20,0x31,0x50,0x08,0x5E,
+0x84,0x20,0x30,0x50,0x0F,0xC2,0x07,0x10,0x34,0x44,0x10,0x5B,0x84,0x6F,0xF1,0x07,
+0x00,0x00,0x08,0x02,0x00,0x21,0x40,0xFC,0x90,0x3D,0x98,0x00,0x04,0xFC,0x84,0x00,
+0x00,0x21,0x04,0xFD,0x84,0x00,0x08,0x21,0x00,0x04,0x00,0x10,0x7E,0x84,0x60,0x00,
+0x08,0xC0,0x00,0x11,0x40,0x7E,0xA0,0x04,0x5B,0x84,0x02,0x00,0x21,0x70,0x08,0x07,
+0x10,0xFE,0x84,0x30,0x20,0x08,0x00,0x03,0x11,0x10,0x00,0x08,0x40,0x59,0x90,0x04,
+0xFF,0x84,0x40,0x58,0xA0,0x10,0x59,0x84,0x20,0x0F,0x08,0x40,0x59,0xA0,0x20,0x00,
+0x11,0x70,0x20,0x07,0x10,0x00,0x08,0x00,0x0B,0x11,0x0F,0xE4,0x07,0x10,0x59,0x84,
+0x00,0x00,0x08,0x20,0x30,0x50,0x40,0x59,0xA0,0x70,0x06,0x07,0x10,0x00,0x08,0x00,
+0x0A,0x11,0x0F,0xEC,0x07,0x08,0x34,0x44,0x02,0x10,0x11,0x10,0x58,0x84,0x20,0x0F,
+0x08,0x40,0x58,0xA0,0x20,0x00,0x11,0x30,0x08,0x07,0x0F,0xF4,0x07,0x10,0x58,0x84,
+0x00,0x00,0x08,0x20,0x30,0x50,0x40,0x58,0xA0,0x70,0x06,0x07,0x10,0x00,0x08,0x00,
+0x05,0x11,0x00,0x04,0x00,0x10,0x5A,0x84,0x00,0x00,0x08,0x00,0x01,0x11,0x40,0x5A,
+0xA0,0x08,0x34,0x44,0x02,0x00,0x11,0x30,0x08,0x07,0x60,0x00,0x08,0x00,0x00,0x11,
+0x40,0x5A,0xA0,0x8F,0x53,0x07,0x40,0x7E,0xA0,0x00,0x04,0x00,0x3C,0xA3,0x00,0x10,
+0x00,0x20,0xA8,0x14,0x43,0x04,0xA7,0x84,0x20,0x8E,0x08,0x40,0xC4,0x90,0x40,0x73,
+0xA0,0x20,0x0F,0x08,0x40,0xC5,0x90,0x40,0xA7,0xA0,0x3C,0xAD,0x00,0x10,0x00,0x20,
+0x28,0x14,0x43,0x04,0x27,0x84,0x20,0x8E,0x08,0x40,0x44,0x90,0x40,0x71,0xA0,0x20,
+0x0F,0x08,0x40,0x45,0x90,0x40,0x27,0xA0,0x04,0x73,0x84,0x40,0xAF,0xA0,0x04,0x71,
+0x84,0x40,0x2F,0xA0,0x30,0x05,0x07,0x60,0x00,0x08,0x40,0x51,0x90,0x00,0x00,0x21,
+0x3C,0xE0,0x00,0x60,0x00,0x08,0x72,0x14,0x43,0x40,0xAF,0x90,0x00,0x00,0x21,0x3C,
+0xE5,0x00,0x60,0x00,0x08,0x70,0x14,0x43,0x40,0x2F,0x90,0x00,0x00,0x21,0x00,0x04,
+0x00,0x10,0xF0,0x44,0x50,0x00,0x08,0xFF,0xF7,0x11,0x93,0x04,0x07,0x20,0xF0,0x60,
+0x04,0x61,0x84,0x04,0x5C,0x84,0x40,0x57,0xA0,0x00,0x04,0x00,0x10,0x61,0x84,0x00,
+0x20,0x08,0x20,0x1F,0x08,0x40,0xFF,0xA0,0x10,0x00,0x08,0x40,0x5C,0x90,0x40,0x57,
+0xA0,0x04,0x74,0x84,0x10,0x00,0x20,0x00,0x00,0x08,0x40,0x74,0xA0,0x00,0x01,0x11,
+0x20,0x05,0x07,0x00,0x40,0x21,0x70,0x00,0x08,0x7F,0xFF,0x21,0x08,0xFF,0x84,0x42,
+0x00,0x90,0x85,0x02,0x07,0x20,0xF0,0x60,0x7F,0xFF,0x11,0x60,0x20,0x08,0x00,0xD0,
+0x11,0x40,0x00,0x08,0x00,0x02,0x11,0x86,0x1B,0x07,0x40,0x74,0xA0,0x08,0x66,0x84,
+0x7F,0xFF,0x11,0x8A,0x02,0x07,0x89,0x03,0x07,0x40,0x7E,0xA0,0x00,0x00,0x11,0x08,
+0x6F,0x84,0x00,0x00,0x11,0x04,0xF1,0x84,0x00,0x40,0x21,0x10,0x7E,0x84,0x60,0x00,
+0x08,0x40,0x7E,0xA0,0x02,0x00,0x11,0x60,0x09,0x07,0x10,0x20,0x08,0x40,0xC3,0x90,
+0x20,0x2F,0x08,0x80,0x00,0x11,0x70,0x02,0x07,0x7F,0xFF,0x11,0x10,0x00,0x08,0x40,
+0x9D,0x90,0x40,0x85,0xA0,0x08,0x63,0x84,0x7F,0xFF,0x11,0x82,0x02,0x07,0x81,0x03,
+0x07,0x40,0x7E,0xA0,0x00,0x00,0x11,0x08,0x6E,0x84,0x00,0x00,0x11,0x04,0xF0,0x84,
+0x00,0x40,0x21,0x10,0x7E,0x84,0x60,0x00,0x08,0x40,0x7E,0xA0,0x00,0x02,0x11,0x60,
+0x09,0x07,0x10,0x20,0x08,0x40,0x43,0x90,0x20,0x2F,0x08,0x80,0x00,0x11,0x70,0x02,
+0x07,0x7F,0xFF,0x11,0x10,0x00,0x08,0x40,0x1D,0x90,0x40,0x05,0xA0,0x10,0xEC,0x84,
+0x00,0x10,0x08,0x10,0xE7,0x84,0x40,0xE7,0xA0,0x20,0x0F,0x08,0x40,0xEF,0xA0,0x10,
+0x6D,0x84,0x00,0x10,0x08,0x10,0x6C,0x84,0x40,0x6C,0xA0,0x20,0x0F,0x08,0x40,0x7D,
+0xA0,0x7F,0xFF,0x11,0x00,0x04,0x00,0x10,0xEF,0x84,0x00,0x10,0x08,0x10,0xEE,0x84,
+0x40,0xEE,0xA0,0x20,0x0F,0x08,0x40,0xBD,0xA0,0x10,0x7D,0x84,0x00,0x10,0x08,0x10,
+0x7C,0x84,0x40,0x7C,0xA0,0x20,0x0F,0x08,0x40,0x3D,0xA0,0x40,0x00,0x11,0x3E,0x83,
+0x00,0xFB,0xFF,0x21,0x6F,0x14,0x43,0x3E,0x86,0x00,0xFF,0xFB,0x21,0x6E,0x14,0x43,
+0x3E,0x89,0x00,0xFF,0xFF,0x21,0x51,0x14,0x43,0x3D,0x42,0x00,0x40,0x73,0xA0,0xA0,
+0x14,0x43,0x3D,0x45,0x00,0x40,0x71,0xA0,0x20,0x14,0x43,0x00,0x04,0x00,0x3D,0x49,
+0x00,0x40,0xA5,0xA0,0xB0,0x14,0x43,0x3D,0x4C,0x00,0x40,0x25,0xA0,0x30,0x14,0x43,
+0x3E,0x63,0x00,0xB8,0x14,0x43,0x40,0xC2,0xA0,0x3E,0x66,0x00,0x38,0x14,0x43,0x40,
+0x42,0xA0,0x00,0x04,0x00,0x3E,0xA0,0x00,0xFD,0xFF,0x21,0xF1,0x14,0x43,0x3E,0xA3,
+0x00,0xFF,0xFD,0x21,0xF0,0x14,0x43,0x3E,0x70,0x00,0x40,0x87,0xA0,0x80,0x14,0x43,
+0x3E,0x73,0x00,0x40,0x07,0xA0,0x00,0x14,0x43,0x00,0x04,0x00,0x10,0xB9,0x84,0x20,
+0x0F,0x08,0x40,0xBE,0xA0,0x40,0xB6,0x90,0x08,0xBE,0x84,0x70,0x02,0x07,0x10,0x20,
+0x08,0x7F,0xC0,0x11,0x10,0xBE,0x84,0x00,0x00,0x08,0x40,0x53,0xA0,0x7F,0xC0,0x11,
+0x04,0x51,0x84,0x00,0x1F,0x21,0x10,0xBC,0x84,0x20,0x0F,0x08,0x70,0x00,0x11,0x40,
+0xBC,0xA0,0x10,0x9C,0x84,0x10,0x94,0x84,0x20,0x0D,0x08,0x7F,0xFF,0x21,0x40,0x8D,
+0x90,0x99,0x0D,0x07,0x40,0x7E,0xA0,0x40,0xBE,0x90,0x10,0x9C,0x84,0x10,0x94,0x84,
+0x20,0x0D,0x08,0x7F,0xFF,0x21,0x40,0x8D,0x90,0x08,0x53,0x84,0xFF,0xFF,0x11,0x9A,
+0x0A,0x07,0x40,0xBE,0x90,0x08,0x53,0x84,0x00,0x01,0x11,0x40,0x7E,0xA0,0x10,0x39,
+0x84,0x20,0x0F,0x08,0x40,0x3E,0xA0,0x40,0x36,0x90,0x08,0x3E,0x84,0x70,0x02,0x07,
+0x10,0x20,0x08,0x7F,0xC0,0x11,0x10,0x3E,0x84,0x00,0x00,0x08,0x40,0x52,0xA0,0x7F,
+0xC0,0x11,0x04,0x51,0x84,0x00,0x1F,0x21,0x10,0x3C,0x84,0x20,0x0F,0x08,0x70,0x00,
+0x11,0x40,0x3C,0xA0,0x10,0x1C,0x84,0x10,0x14,0x84,0x20,0x0D,0x08,0x7F,0xFF,0x21,
+0x40,0x0D,0x90,0x91,0x0D,0x07,0x40,0x7E,0xA0,0x40,0x3E,0x90,0x10,0x1C,0x84,0x10,
+0x14,0x84,0x20,0x0D,0x08,0x7F,0xFF,0x21,0x40,0x0D,0x90,0x08,0x52,0x84,0xFF,0xFF,
+0x11,0x92,0x0A,0x07,0x40,0x3E,0x90,0x08,0x52,0x84,0x00,0x01,0x11,0x40,0x7E,0xA0,
+0x00,0x04,0x00,0x3E,0xC4,0x00,0x40,0x85,0xA0,0x88,0x14,0x43,0x3E,0xC7,0x00,0x40,
+0x05,0xA0,0x08,0x14,0x43,0x00,0x04,0x00,0x3E,0xCB,0x00,0x40,0x8D,0xA0,0x90,0x14,
+0x43,0x3E,0xCE,0x00,0x40,0x0D,0xA0,0x10,0x14,0x43,0x00,0x04,0x00,0x3E,0xD2,0x00,
+0x40,0x95,0xA0,0x98,0x14,0x43,0x3E,0xD5,0x00,0x40,0x15,0xA0,0x18,0x14,0x43,0x00,
+0x04,0x00,0x00,0x01,0x07,0x00,0x02,0x07,0x00,0x03,0x07,0x00,0x05,0x07,0x00,0x0D,
+0x07,0x00,0x15,0x07,0x00,0x1D,0x07,0x00,0x6B,0x07,0x00,0x79,0x07,0x00,0x87,0x07,
+0x00,0xA5,0x07,0x01,0x08,0x07,0x01,0x30,0x07,0x02,0x27,0x07,0x02,0x41,0x07,0x00,
+0x10,0x07,0x1F,0xFF,0x07,0x20,0x03,0x60,0x0F,0x5B,0x07,0x08,0xFA,0x84,0x04,0x11,
+0x44,0xFF,0x00,0x11,0x2F,0x5F,0x07,0x70,0x10,0x08,0x00,0xF0,0x21,0x50,0x00,0x08,
+0x00,0xF0,0x21,0x40,0xF9,0x90,0x00,0x08,0x07,0x3E,0x79,0x00,0x0F,0x67,0x07,0x04,
+0x51,0x84,0x00,0x1F,0x21,0x3F,0x6A,0x07,0x70,0x20,0x08,0x00,0x1E,0x11,0x50,0x00,
+0x08,0x20,0x05,0x07,0x70,0x00,0x08,0x00,0x7F,0x11,0x40,0xF8,0xA0,0x08,0xFA,0x84,
+0x04,0x11,0x44,0x3E,0x56,0x00,0x00,0x18,0x07,0x48,0x80,0x11,0x08,0x09,0x44,0x40,
+0x75,0x90,0x7F,0xEF,0x07,0x10,0x00,0x20,0x00,0x10,0x08,0xFF,0xFF,0x21,0x06,0x00,
+0x84,0x40,0xFB,0xA0,0x60,0x00,0x08,0x00,0x00,0x21,0x40,0xFF,0x90,0x10,0xFB,0x84,
+0x60,0x20,0x08,0x40,0xFB,0x90,0x30,0x00,0x08,0x00,0x08,0x11,0x3D,0xEC,0x00,0x04,
+0xFB,0x84,0x3D,0xEE,0x00,0x04,0xFF,0x84,0x40,0xF8,0xA0,0x04,0x11,0x44,0x8F,0xFF,
+0x07,0x20,0x19,0x60,0x3E,0xD4,0x00,0x00,0x03,0x00,0x8F,0xFF,0x07,0x20,0x19,0x60,
+0x08,0x1C,0x44,0x04,0x1B,0x44,0x00,0x38,0x07,0x00,0x01,0x00,0x00,0x3A,0x07,0x00,
+0x02,0x00,0x20,0x05,0x00,0x40,0xD3,0xA0,0x20,0x07,0x00,0x4C,0x00,0x21,0x20,0x09,
+0x00,0x48,0x24,0x21,0x20,0x0B,0x00,0x48,0x14,0x21,0x40,0xD2,0x90,0x20,0x0E,0x00,
+0x48,0x22,0x21,0x20,0x10,0x00,0x48,0x12,0x21,0x40,0xD1,0x90,0x20,0x13,0x00,0x48,
+0x20,0x21,0x20,0x15,0x00,0x48,0x10,0x21,0x40,0xD0,0x90,0x20,0x18,0x00,0x4C,0x02,
+0x21,0x04,0x72,0x44,0x04,0x37,0x21,0x3F,0xFA,0x07,0x70,0x20,0x08,0x00,0x00,0x11,
+0x10,0x2D,0x44,0x10,0x2C,0x44,0x00,0x20,0x08,0x10,0x00,0x11,0x00,0x00,0x08,0x00,
+0x00,0x11,0x80,0x00,0x21,0x04,0x73,0x44,0x07,0x07,0x21,0x04,0x72,0x44,0x00,0x07,
+0x21,0x04,0x73,0x44,0x07,0x77,0x21,0x04,0x73,0x44,0x00,0x70,0x21,0x04,0x2E,0x44,
+0x04,0x2D,0x44,0x04,0x2C,0x44,0x80,0x00,0x21,0x08,0x28,0x44,0x01,0x11,0x11,0x08,
+0x5D,0x84,0x10,0x00,0x10,0x10,0x00,0x08,0x40,0x00,0x21,0x30,0x04,0x07,0x40,0xFF,
+0x90,0x50,0x20,0x08,0xC0,0x00,0x11,0x10,0xFF,0x84,0x00,0x20,0x08,0x00,0x40,0x11,
+0x40,0x00,0x08,0x00,0x01,0x11,0x20,0x51,0x60,0x10,0x00,0x44,0x60,0x00,0x08,0x40,
+0x54,0x90,0x20,0x00,0x60,0x00,0x7D,0x07,0x81,0x45,0x07,0x80,0x03,0x07,0x40,0xF8,
+0xA0,0x48,0xC0,0x11,0x00,0x7B,0x07,0x00,0x7C,0x07,0x00,0x7D,0x07,0x00,0x04,0x07,
+0x00,0x7F,0x07,0x00,0x80,0x07,0x00,0x81,0x07,0x00,0x57,0x07,0x00,0x83,0x07,0x00,
+0x84,0x07,0x00,0x85,0x07,0x00,0x76,0x07,0x00,0x87,0x07,0x00,0x86,0x07,0x00,0x89,
+0x07,0x00,0x8A,0x07,0x0F,0xEF,0x07,0x1F,0xFF,0x07,0xFF,0x00,0x11,0x10,0x00,0x20,
+0x30,0x10,0x08,0x00,0x01,0x21,0x50,0x00,0x08,0x00,0x0F,0x21,0x40,0xF9,0x90,0x30,
+0x94,0x07,0x70,0x10,0x08,0x00,0x80,0x21,0x50,0x00,0x08,0x00,0xF0,0x21,0x08,0xF9,
+0x84,0x04,0xF8,0x84,0x2F,0xFF,0x07,0x3E,0x5D,0x00,0x04,0xF1,0x84,0x04,0xF0,0x84,
+0x04,0x5A,0x84,0x00,0x00,0x21,0x04,0xF6,0x84,0x07,0xA3,0x21,0x04,0xFA,0x84,0x40,
+0x00,0x21,0x04,0xF7,0x84,0x01,0x04,0x21,0x04,0x70,0x44,0x06,0x66,0x21,0x04,0x3B,
+0x44,0x04,0x39,0x44,0x00,0x80,0x21,0x04,0x3C,0x44,0x2A,0x0F,0x21,0x04,0x2F,0x44,
+0x00,0x44,0x21,0x04,0x29,0x44,0x00,0x00,0x21,0x03,0x19,0x42,0x4E,0x19,0x43,0x0C,
+0x59,0x43,0x1F,0x18,0x43,0x75,0x00,0x43,0x04,0x22,0x44,0x03,0x07,0x21,0x04,0x21,
+0x44,0x11,0x11,0x21,0x04,0x20,0x44,0x33,0x33,0x21,0x00,0x00,0x42,0xC0,0x3D,0x42,
+0x80,0x3D,0x43,0x04,0x35,0x44,0x00,0x00,0x21,0x04,0x05,0x43,0x42,0xCD,0x00
+};
+
+static uint8_t bu63164gwl_act_init_mem_settings[] = {
+/* DOWNLOAD_BU63164_EX__6R75000M_CN0_006.mem */
+0x88,0xef,0x00,0x00,0x00,0x20,0x00,0x30,0x00,0x00,0x00,0x00,0xab,0x0a,0x00,0x40,
+0x00,0x40,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x80,0x00,0x00,0x87,0x82,0xb7,0x7e,
+0xa2,0x00,0xff,0x7f,0xcc,0x7c,0x50,0x78,0x82,0x70,0x78,0x68,0x2b,0x63,0xee,0x5e,
+0x25,0x54,0xdc,0x48,0x3e,0x3e,0x33,0x32,0x70,0x27,0x4f,0x1e,0x86,0x18,0xf4,0x17,
+0x74,0x12,0x00,0x00,0x00,0x00,0x00,0x00,0xff,0x7f,0xdd,0x98,0x52,0x98,0xd2,0x5c,
+0x7d,0x72,0x4a,0x28,0x00,0x40,0x00,0x8a,0x00,0x40,0x00,0x19,0x00,0x7f,0xff,0x7f,
+0x80,0x07,0x00,0x00,0xff,0x7f,0x00,0x00,0x00,0x00,0x90,0xcb,0x70,0x74,0xf2,0x7f,
+0x35,0x14,0x00,0x00,0xf2,0x7f,0x00,0x00,0x00,0x00,0xcb,0xf7,0x3e,0x4b,0x00,0x7a,
+0x00,0x1c,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x29,0x32,0x29,0x32,0x00,0x24,
+0xff,0x7f,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xf8,0x00,0x30,0x00,0x6c,
+0x00,0x20,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x10,0x00,0x10,0x85,0x7c,
+0xee,0x0d,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x10,0x00,0x10,0x85,0x7c,
+0xee,0x0d,0x00,0x20,0xff,0x7f,0x00,0x00,0x00,0x00,0x00,0x40,0x00,0x40,0x00,0x60,
+0x00,0x20,0x00,0x00,0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x40,0x00,0x40,0x00,0x60,
+0x00,0x20,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x80,0x00,0x80,0x1b,0x1c,
+0x00,0x00,0x00,0x32,0x67,0xe0,0x00,0x10,0x10,0x00,0x00,0x00,0x00,0x10,0x00,0x00,
+0x00,0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xba,0x07,0x00,0x00,0x00,0x00,
+0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0x00,0x00,0x00,
+0x00,0x00,0xcc,0x59,0x00,0x00,0x00,0x40,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x0a,0x01,0x00,0x01,0x00,0x00,0x00,
+0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xff,0x7f,0xdd,0x98,0x52,0x98,0xd2,0x5c,
+0x7d,0x72,0x4a,0x28,0x00,0x40,0x00,0x8a,0x00,0x40,0x00,0x19,0x00,0x7f,0xff,0x7f,
+0x80,0x07,0x00,0x00,0xff,0x7f,0x00,0x00,0x00,0x00,0x90,0xcb,0x70,0x74,0xf2,0x7f,
+0x35,0x14,0x00,0x00,0xf2,0x7f,0x00,0x00,0x00,0x00,0xcb,0xf7,0x3e,0x4b,0x00,0x7a,
+0x00,0x1c,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x29,0x32,0x29,0x32,0x00,0x24,
+0xff,0x7f,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xf8,0x00,0x30,0x00,0x6c,
+0x00,0x20,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x10,0x00,0x10,0x85,0x7c,
+0xee,0x0d,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x10,0x00,0x10,0x85,0x7c,
+0xee,0x0d,0x00,0x20,0xff,0x7f,0x00,0x00,0x00,0x00,0x00,0x40,0x00,0x40,0x00,0x60,
+0x00,0x20,0x00,0x00,0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x40,0x00,0x40,0x00,0x60,
+0x00,0x20
+};
+
+static int32_t bu63164gwl_actuator_write_ois(uint8_t cmd_type, uint8_t addr,
+										uint16_t data)
+{
+	int32_t rc = -EFAULT;
+	struct i2c_msg msg;
+	uint16_t saddr = bu63164gwl_act_t.i2c_client.client->addr >> 1;
+	int i = 0;
+	uint8_t trans_buf[4] = {0};
+
+	CDBG("%s L.%d cmd:0x%02X adr:0x%02X", __func__, __LINE__, cmd_type, addr);
+
+	if((cmd_type != BU63164GWL_OIS_CMD_SPE) &&
+	   (cmd_type != BU63164GWL_OIS_CMD_MEM) &&
+	   (cmd_type != BU63164GWL_OIS_CMD_PER)) {
+		pr_err("%s L.%d invalid cmd 0x%x", __func__, __LINE__, cmd_type);
+		return rc;
+	}
+
+	if (cmd_type == BU63164GWL_OIS_CMD_SPE) {
+		msg.flags = 0;
+		msg.len = 2;
+		msg.addr = saddr;
+		msg.buf = &trans_buf[0];
+		trans_buf[i] = cmd_type;
+		trans_buf[++i] = addr;
+	} else {
+		msg.flags = 0;
+		msg.len = 4;
+		msg.addr = saddr;
+		msg.buf = &trans_buf[0];
+		trans_buf[i] = cmd_type;
+		trans_buf[++i] = addr;
+		trans_buf[++i] = (uint8_t)(data & 0x00FF);
+		trans_buf[++i] = (uint8_t)((data & 0xFF00) >> 8);
+	}
+
+	CDBG("%s L.%d data: 0x%02X 0x%02X 0x%02X 0x%02X", __func__, __LINE__, 
+		trans_buf[0], trans_buf[1], trans_buf[2], trans_buf[3]);
+
+	rc = i2c_transfer(bu63164gwl_act_t.i2c_client.client->adapter, &msg, 1);
+	if(rc < 0){
+		pr_err("%s L.%d failed rc:%d saddr:0x%x",
+				__func__, __LINE__, rc, saddr);
+		return rc;
+	}
+
+	CDBG("%s L.%d rc:%d", __func__, __LINE__, rc);
+
+	return rc;
+}
+
+static int32_t bu63164gwl_act_status_check(struct msm_actuator_ctrl_t *a_ctrl,
+										int retry_max)
+{
+	unsigned char	sts[4];
+	uint16_t saddr = 0x1c >> 1;
+	int32_t rc = 0;
+	struct i2c_msg msg[] = {
+		{
+			.flags = 0,
+		 },
+		{
+			.flags = I2C_M_RD,
+		},
+	};
+	int r_max = retry_max;
+
+	while(r_max) {
+		msg[0].len = 1;
+		msg[0].addr = saddr;
+		msg[0].buf =&sts[0];
+		msg[1].len = 1;
+		msg[1].addr = saddr;
+		msg[1].buf =&sts[0];
+		sts[0] = 0xF0;
+		rc = i2c_transfer(a_ctrl->i2c_client.client->adapter, msg, 2);
+		CDBG("rc = %d : Actuator Status %02x\n", rc, sts[0]);
+		if((sts[0] & 0x88) == 0x00) { return 0; }
+
+		msg[0].len = 2;
+		msg[0].addr = saddr;
+		msg[0].buf =&sts[0];
+		msg[1].len = 2;
+		msg[1].addr = saddr;
+		msg[1].buf =&sts[0];
+		sts[0] = 0x84;
+		sts[1] = 0xF7;
+		rc = i2c_transfer(a_ctrl->i2c_client.client->adapter, msg, 2);
+		CDBG("rc = %d : Ois Status %02x, %02x\n", rc, sts[0],sts[1]);
+		if(rc > 0) {
+			if(sts[1] == 0x84) {
+				msg[0].flags = 0;
+				msg[0].len = 4;
+				msg[0].addr = saddr;
+				msg[0].buf =&sts[0];
+				sts[0] = 0x84;
+				sts[1] = 0xF7;
+				sts[2] = 0x04;
+				sts[3] = 0x01;
+				rc = i2c_transfer(a_ctrl->i2c_client.client->adapter, msg, 1);
+				if (rc < 0){
+					pr_err("msm_camera_i2c_txdata faild 0x%x\n", saddr);
+				}
+			}
+		}
+
+		msleep(1);
+		--r_max;
+	}
+
+	return -EFAULT;
+}
+
+int32_t bu63164gwl_actuator_parse_i2c_params(struct msm_actuator_ctrl_t *a_ctrl,
+	int16_t next_lens_position, uint32_t hw_params, uint16_t delay)
+{
+	int32_t rc = 0;
+	unsigned char	data[5];
+	uint16_t saddr = 0x1c >> 1;
+	struct i2c_msg msg[] = {
+		{
+			.flags = 0,
+			.len = 5,
+		 },
+	};
+
+	CDBG("%s: lens_position=%d\n", __func__, next_lens_position);
+	if(bu63164gwl_act_status_check(a_ctrl, 10) < 0) {
+		pr_err("%s: cannot i2c_txdata 0x%x\n", __func__, saddr);
+//		kfree(data);
+		return -EFAULT;
+	}
+
+	data[0] = 0xF0;
+	data[1] = 0x90;
+	data[2] = 0x00;
+	data[3] = (next_lens_position & 0xFF00) >> 8;
+	data[4] = (next_lens_position & 0x00FF);
+	msg[0].addr=saddr;
+	msg[0].buf=&data[0];
+
+	rc = i2c_transfer(a_ctrl->i2c_client.client->adapter, msg, 1);
+	if(rc > 0) {
+		rc = 0;
+		virtual_vcm_dreg = next_lens_position;
+	}
+
+	CDBG("%s: exit rc=%d\n", __func__, rc);
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_init_focus(struct msm_actuator_ctrl_t *a_ctrl,
+	uint16_t size, enum msm_actuator_data_type type,
+	struct reg_settings_t *settings)
+{
+	int32_t rc = -EFAULT;
+	int32_t i = 0;
+	CDBG("%s called\n", __func__);
+
+	for (i = 0; i < size; i++) {
+		switch (type) {
+		case MSM_ACTUATOR_BYTE_DATA:
+			rc = msm_camera_i2c_write(
+				&a_ctrl->i2c_client,
+				settings[i].reg_addr,
+				settings[i].reg_data, MSM_CAMERA_I2C_BYTE_DATA);
+			break;
+		case MSM_ACTUATOR_WORD_DATA:
+			rc = msm_camera_i2c_write(
+				&a_ctrl->i2c_client,
+				settings[i].reg_addr,
+				settings[i].reg_data, MSM_CAMERA_I2C_WORD_DATA);
+			break;
+		default:
+			pr_err("%s: Unsupport data type: %d\n",
+				__func__, type);
+			break;
+		}
+		if (rc < 0)
+			break;
+	}
+
+	a_ctrl->curr_step_pos = 0;
+	CDBG("%s Exit:%d\n", __func__, rc);
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_write_focus(
+	struct msm_actuator_ctrl_t *a_ctrl,
+	uint16_t curr_lens_pos,
+	struct damping_params_t *damping_params,
+	int8_t sign_direction,
+	int16_t code_boundary)
+{
+	int32_t rc = 0;
+	int16_t next_lens_pos = 0;
+	uint16_t damping_code_step = 0;
+	uint16_t wait_time = 0;
+
+	damping_code_step = damping_params->damping_step;
+	wait_time = damping_params->damping_delay;
+
+	if(a_ctrl->func_tbl) {
+		rc = a_ctrl->func_tbl->actuator_parse_i2c_params(a_ctrl,
+				code_boundary,damping_params->hw_params, wait_time);
+	}
+	++next_lens_pos;		//dummy code
+
+	CDBG("%s: [L:%d]  Exit %d\n", __func__, __LINE__, rc);
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_move_focus(
+	struct msm_actuator_ctrl_t *a_ctrl,
+	struct msm_actuator_move_params_t *move_params)
+{
+	int32_t rc = 0;
+	int8_t sign_dir = move_params->sign_dir;
+	uint16_t step_boundary = 0;
+	uint16_t target_step_pos = 0;
+	uint16_t target_lens_pos = 0;
+	int16_t dest_step_pos = move_params->dest_step_pos;
+	uint16_t curr_lens_pos = 0;
+	int dir = move_params->dir;
+	int32_t num_steps = move_params->num_steps;
+
+	CDBG("%s called, dir %d, num_steps %d\n",
+		__func__,
+		dir,
+		num_steps);
+
+#if 1
+	curr_lens_pos = virtual_vcm_dreg;
+
+	if (a_ctrl->step_position_table == NULL) {
+		pr_err("%s: step_position_table is NULL\n", __func__);
+		return -EFAULT;
+	}
+
+	if (curr_lens_pos != a_ctrl->step_position_table[a_ctrl->curr_step_pos]) {
+		curr_lens_pos = a_ctrl->step_position_table[a_ctrl->curr_step_pos];
+		rc = a_ctrl->func_tbl->actuator_parse_i2c_params(a_ctrl,
+												 curr_lens_pos, 0, 0);
+		if (rc < 0) {
+			pr_err("%s: error:%d\n", __func__, rc);
+			return rc;
+		}
+	}
+#endif
+
+	if (dest_step_pos == a_ctrl->curr_step_pos)
+		return rc;
+
+	curr_lens_pos = a_ctrl->step_position_table[a_ctrl->curr_step_pos];
+	CDBG("curr_step_pos =%d dest_step_pos =%d curr_lens_pos=%d\n",
+		a_ctrl->curr_step_pos, dest_step_pos, curr_lens_pos);
+
+	while (a_ctrl->curr_step_pos != dest_step_pos) {
+		step_boundary =
+			a_ctrl->region_params[a_ctrl->curr_region_index].
+			step_bound[dir];
+		if ((dest_step_pos * sign_dir) <=
+			(step_boundary * sign_dir)) {
+
+			target_step_pos = dest_step_pos;
+			target_lens_pos =
+				a_ctrl->step_position_table[target_step_pos];
+			rc = a_ctrl->func_tbl->
+				actuator_write_focus(
+					a_ctrl,
+					curr_lens_pos,
+					&(move_params->
+						ringing_params[a_ctrl->
+						curr_region_index]),
+					sign_dir,
+					target_lens_pos);
+			if (rc < 0) {
+				pr_err("%s: error:%d\n",
+					__func__, rc);
+				return rc;
+			}
+			curr_lens_pos = target_lens_pos;
+
+		} else {
+			target_step_pos = step_boundary;
+			target_lens_pos =
+				a_ctrl->step_position_table[target_step_pos];
+			rc = a_ctrl->func_tbl->
+				actuator_write_focus(
+					a_ctrl,
+					curr_lens_pos,
+					&(move_params->
+						ringing_params[a_ctrl->
+						curr_region_index]),
+					sign_dir,
+					target_lens_pos);
+			if (rc < 0) {
+				pr_err("%s: error:%d\n",
+					__func__, rc);
+				return rc;
+			}
+			curr_lens_pos = target_lens_pos;
+
+			a_ctrl->curr_region_index += sign_dir;
+		}
+		a_ctrl->curr_step_pos = target_step_pos;
+	}
+
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_init_step_table(struct msm_actuator_ctrl_t *a_ctrl,
+	struct msm_actuator_set_info_t *set_info)
+{
+	int16_t code_per_step = 0;
+	int32_t rc = 0;
+	int16_t cur_code = 0;
+	int16_t step_index = 0, region_index = 0;
+	uint16_t step_boundary = 0;
+	uint32_t max_code_size = 1;
+	uint16_t data_size = set_info->actuator_params.data_size;
+	CDBG("%s called\n", __func__);
+
+	for (; data_size > 0; data_size--)
+		max_code_size *= 2;
+
+	kfree(a_ctrl->step_position_table);
+	a_ctrl->step_position_table = NULL;
+
+	/* Fill step position table */
+	a_ctrl->step_position_table =
+		kmalloc(sizeof(uint16_t) *
+		(set_info->af_tuning_params.total_steps + 1), GFP_KERNEL);
+
+	if (a_ctrl->step_position_table == NULL)
+		return -EFAULT;
+
+	cur_code = set_info->af_tuning_params.initial_code;
+	a_ctrl->step_position_table[step_index++] = cur_code;
+	for (region_index = 0;
+		region_index < a_ctrl->region_size;
+		region_index++) {
+		code_per_step =
+			a_ctrl->region_params[region_index].code_per_step;
+		step_boundary =
+			a_ctrl->region_params[region_index].
+			step_bound[MOVE_NEAR];
+		for (; step_index <= step_boundary;
+			step_index++) {
+			cur_code += code_per_step;
+			if (cur_code < max_code_size)
+				a_ctrl->step_position_table[step_index] =
+					cur_code;
+			else {
+				for (; step_index <
+					set_info->af_tuning_params.total_steps;
+					step_index++)
+					a_ctrl->
+						step_position_table[
+						step_index] =
+						max_code_size;
+
+				return rc;
+			}
+		}
+	}
+
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_set_default_focus(
+	struct msm_actuator_ctrl_t *a_ctrl,
+	struct msm_actuator_move_params_t *move_params)
+{
+	int32_t rc = 0;
+	CDBG("%s called\n", __func__);
+
+	if (a_ctrl->curr_step_pos != 0)
+		rc = a_ctrl->func_tbl->actuator_move_focus(a_ctrl, move_params);
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_power_down(struct msm_actuator_ctrl_t *a_ctrl)
+{
+	int32_t rc = 0;
+	if (a_ctrl->vcm_enable) {
+		rc = gpio_direction_output(a_ctrl->vcm_pwd, 0);
+		if (!rc)
+			gpio_free(a_ctrl->vcm_pwd);
+	}
+
+	if(a_ctrl->step_position_table)
+		kfree(a_ctrl->step_position_table);
+	a_ctrl->step_position_table = NULL;
+	bu63164gwl_actuator_set_ois_off();
+
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_init(struct msm_actuator_ctrl_t *a_ctrl,
+	struct msm_actuator_set_info_t *set_info) {
+	struct reg_settings_t *init_settings = NULL;
+	int32_t rc = -EFAULT;
+	uint16_t i = 0;
+	CDBG("%s: IN\n", __func__);
+
+	for (i = 0; i < ARRAY_SIZE(actuators); i++) {
+		if (set_info->actuator_params.act_type ==
+			actuators[i]->act_type) {
+			a_ctrl->func_tbl = &actuators[i]->func_tbl;
+			rc = 0;
+		}
+	}
+
+	if (rc < 0) {
+		pr_err("%s: Actuator function table not found\n", __func__);
+		return rc;
+	}
+
+	a_ctrl->region_size = set_info->af_tuning_params.region_size;
+	if (a_ctrl->region_size > MAX_ACTUATOR_REGION) {
+		pr_err("%s: MAX_ACTUATOR_REGION is exceeded.\n", __func__);
+		return -EFAULT;
+	}
+	a_ctrl->total_steps = set_info->af_tuning_params.total_steps;
+	a_ctrl->pwd_step = set_info->af_tuning_params.pwd_step;
+	a_ctrl->total_steps = set_info->af_tuning_params.total_steps;
+
+	if (copy_from_user(&a_ctrl->region_params,
+		(void *)set_info->af_tuning_params.region_params,
+		a_ctrl->region_size * sizeof(struct region_params_t)))
+		return -EFAULT;
+
+	a_ctrl->i2c_data_type = set_info->actuator_params.i2c_data_type;
+	a_ctrl->i2c_client.client->addr = set_info->actuator_params.i2c_addr;
+	a_ctrl->i2c_client.addr_type = set_info->actuator_params.i2c_addr_type;
+	a_ctrl->reg_tbl_size = set_info->actuator_params.reg_tbl_size;
+	if (a_ctrl->reg_tbl_size > MAX_ACTUATOR_REG_TBL_SIZE) {
+		pr_err("%s: MAX_ACTUATOR_REG_TBL_SIZE is exceeded.\n",
+			__func__);
+		return -EFAULT;
+	}
+	if (copy_from_user(&a_ctrl->reg_tbl,
+		(void *)set_info->actuator_params.reg_tbl_params,
+		a_ctrl->reg_tbl_size *
+		sizeof(struct msm_actuator_reg_params_t)))
+		return -EFAULT;
+
+	if (set_info->actuator_params.init_setting_size) {
+		if (a_ctrl->func_tbl->actuator_init_focus) {
+			init_settings = kmalloc(sizeof(struct reg_settings_t) *
+				(set_info->actuator_params.init_setting_size),
+				GFP_KERNEL);
+			if (init_settings == NULL) {
+				pr_err("%s Error allocating memory for init_settings\n",
+					__func__);
+				return -EFAULT;
+			}
+			if (copy_from_user(init_settings,
+				(void *)set_info->actuator_params.init_settings,
+				set_info->actuator_params.init_setting_size *
+				sizeof(struct reg_settings_t))) {
+				kfree(init_settings);
+				pr_err("%s Error copying init_settings\n",
+					__func__);
+				return -EFAULT;
+			}
+			rc = a_ctrl->func_tbl->actuator_init_focus(a_ctrl,
+				set_info->actuator_params.init_setting_size,
+				a_ctrl->i2c_data_type,
+				init_settings);
+			kfree(init_settings);
+			if (rc < 0) {
+				pr_err("%s Error actuator_init_focus\n",
+					__func__);
+				return -EFAULT;
+			}
+		}
+	}
+
+	a_ctrl->initial_code = set_info->af_tuning_params.initial_code;
+	if (a_ctrl->func_tbl->actuator_init_step_table)
+		rc = a_ctrl->func_tbl->
+			actuator_init_step_table(a_ctrl, set_info);
+
+	a_ctrl->curr_step_pos = 0;
+	a_ctrl->curr_region_index = 0;
+
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_set_ois_init(void)
+{
+	int32_t rc = 0;
+	uint16_t saddr = bu63164gwl_act_t.i2c_client.client->addr >> 1;
+	int i;
+	
+	CDBG("%s:%d",__func__,__LINE__);
+	
+	/* OIS adjust */
+	CDBG("CURDAT        %d\n", bu63164gwl_ois_parameter.curdat);
+	CDBG("HALOFS_X      %d\n", bu63164gwl_ois_parameter.halofs_x);
+	CDBG("HALOFS_Y      %d\n", bu63164gwl_ois_parameter.halofs_y);
+	CDBG("PSTXOF        %d\n", bu63164gwl_ois_parameter.pstxof);
+	CDBG("PSTYOF        %d\n", bu63164gwl_ois_parameter.pstyof);
+	CDBG("HX_OFS        %d\n", bu63164gwl_ois_parameter.hx_ofs);
+	CDBG("HY_OFS        %d\n", bu63164gwl_ois_parameter.hy_ofs);
+	CDBG("GX_OFS        %d\n", bu63164gwl_ois_parameter.gx_ofs);
+	CDBG("GY_OFS        %d\n", bu63164gwl_ois_parameter.gy_ofs);
+	CDBG("KGxHG         %d\n", bu63164gwl_ois_parameter.kgxhg);
+	CDBG("KGyHG         %d\n", bu63164gwl_ois_parameter.kgyhg);
+	CDBG("KGXG          %d\n", bu63164gwl_ois_parameter.kgxg);
+	CDBG("KGYG          %d\n", bu63164gwl_ois_parameter.kgyg);
+	CDBG("SFTHAL_X_16_9 %d\n", bu63164gwl_ois_parameter.sfthal_x_16_9);
+	CDBG("SFTHAL_Y_16_9 %d\n", bu63164gwl_ois_parameter.sfthal_y_16_9);
+	CDBG("SFTHAL_X_4_3  %d\n", bu63164gwl_ois_parameter.sfthal_x_4_3);
+	CDBG("SFTHAL_Y_4_3  %d\n", bu63164gwl_ois_parameter.sfthal_y_4_3);
+
+	ois_calibration_setting[0].data  = bu63164gwl_ois_parameter.curdat;
+	ois_calibration_setting[1].data  = bu63164gwl_ois_parameter.hx_ofs;
+	ois_calibration_setting[2].data  = bu63164gwl_ois_parameter.hy_ofs;
+	ois_calibration_setting[3].data  = bu63164gwl_ois_parameter.pstxof;
+	ois_calibration_setting[4].data  = bu63164gwl_ois_parameter.pstyof;
+	ois_calibration_setting[5].data  = bu63164gwl_ois_parameter.gx_ofs;
+	ois_calibration_setting[6].data  = bu63164gwl_ois_parameter.gy_ofs;
+	ois_calibration_setting[7].data  = bu63164gwl_ois_parameter.kgxhg;
+	ois_calibration_setting[8].data  = bu63164gwl_ois_parameter.kgyhg;
+	ois_calibration_setting[9].data  = bu63164gwl_ois_parameter.kgxg;
+	ois_calibration_setting[10].data = bu63164gwl_ois_parameter.kgyg;
+
+	ois_hall_offset_still_setting[0].data = bu63164gwl_ois_parameter.halofs_x;
+	ois_hall_offset_still_setting[1].data = bu63164gwl_ois_parameter.halofs_y;
+
+	ois_hall_offset_video_16_9_setting[0].data = bu63164gwl_ois_parameter.sfthal_x_16_9;
+	ois_hall_offset_video_16_9_setting[1].data = bu63164gwl_ois_parameter.sfthal_y_16_9;
+
+	ois_hall_offset_video_4_3_setting[0].data = bu63164gwl_ois_parameter.sfthal_x_4_3;
+	ois_hall_offset_video_4_3_setting[1].data = bu63164gwl_ois_parameter.sfthal_y_4_3;
+
+	/* Product line calibration value setting  */
+	for(i = 0; i < ARRAY_SIZE(ois_calibration_setting); i++) {
+		rc = bu63164gwl_actuator_write_ois(ois_calibration_setting[i].type,
+			ois_calibration_setting[i].addr, ois_calibration_setting[i].data);
+		if (rc < 0){
+			pr_err("msm_camera_i2c_txdata faild No.%d 0x%x\n", i, saddr);
+			return -EFAULT;
+		}
+	}
+
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_set_ois_still(void)
+{
+	int32_t rc = 0;
+	uint16_t saddr = bu63164gwl_act_t.i2c_client.client->addr >> 1;
+	int i;
+	
+	CDBG("%s:%d",__func__,__LINE__);
+
+	/* OIS scene parameter setting */
+	for(i = 0; i < ARRAY_SIZE(ois_still_mode_setting); i++) {
+		rc = bu63164gwl_actuator_write_ois(ois_still_mode_setting[i].type,
+			ois_still_mode_setting[i].addr, ois_still_mode_setting[i].data);
+		if (rc < 0){
+			pr_err("msm_camera_i2c_txdata faild No.%d 0x%x\n", i, saddr);
+			return -EFAULT;
+		}
+	}
+
+	return rc;
+}
+
+
+int32_t bu63164gwl_actuator_set_ois_video_16_9(void)
+{
+	int32_t rc = 0;
+	uint16_t saddr = bu63164gwl_act_t.i2c_client.client->addr >> 1;
+	int i;
+	
+	CDBG("%s:%d",__func__,__LINE__);
+
+	/* OIS scene parameter setting */
+	for(i = 0; i < ARRAY_SIZE(ois_video_16_9_mode_setting); i++) {
+		rc = bu63164gwl_actuator_write_ois(ois_video_16_9_mode_setting[i].type,
+			ois_video_16_9_mode_setting[i].addr, ois_video_16_9_mode_setting[i].data);
+		if (rc < 0){
+			pr_err("msm_camera_i2c_txdata faild No.%d 0x%x\n", i, saddr);
+			return -EFAULT;
+		}
+	}
+
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_set_ois_video_4_3(void)
+{
+	int32_t rc = 0;
+	uint16_t saddr = bu63164gwl_act_t.i2c_client.client->addr >> 1;
+	int i;
+	
+	CDBG("%s:%d",__func__,__LINE__);
+
+	/* OIS scene parameter setting */
+	for(i = 0; i < ARRAY_SIZE(ois_video_4_3_mode_setting); i++) {
+		rc = bu63164gwl_actuator_write_ois(ois_video_4_3_mode_setting[i].type,
+			ois_video_4_3_mode_setting[i].addr, ois_video_4_3_mode_setting[i].data);
+		if (rc < 0){
+			pr_err("msm_camera_i2c_txdata faild No.%d 0x%x\n", i, saddr);
+			return -EFAULT;
+		}
+	}
+
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_set_ois_off(void)
+{
+	int32_t rc = 0;
+	uint16_t saddr = bu63164gwl_act_t.i2c_client.client->addr >> 1;
+	int i;
+
+	CDBG("%s:%d",__func__,__LINE__);
+
+	/* OIS OFF */
+	for(i = 0; i < ARRAY_SIZE(ois_off_setting); i++) {
+		rc = bu63164gwl_actuator_write_ois(ois_off_setting[i].type,
+			ois_off_setting[i].addr, ois_off_setting[i].data);
+		if (rc < 0){
+			CDBG("msm_camera_i2c_txdata faild No.%d 0x%x\n", i, saddr);
+			return -EFAULT;
+		}
+	}
+
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_set_hall_offset_still(void)
+{
+	int32_t rc = 0;
+	uint16_t saddr = bu63164gwl_act_t.i2c_client.client->addr >> 1;
+	int i;
+
+	CDBG("%s:%d",__func__,__LINE__);
+
+	/* HALL OFFSET (STILL) */
+	for(i = 0; i < ARRAY_SIZE(ois_hall_offset_still_setting); i++) {
+		rc = bu63164gwl_actuator_write_ois(ois_hall_offset_still_setting[i].type,
+			ois_hall_offset_still_setting[i].addr, ois_hall_offset_still_setting[i].data);
+		if (rc < 0){
+			CDBG("msm_camera_i2c_txdata faild No.%d 0x%x\n", i, saddr);
+			return -EFAULT;
+		}
+	}
+
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_set_hall_offset_video_16_9(void)
+{
+	int32_t rc = 0;
+	uint16_t saddr = bu63164gwl_act_t.i2c_client.client->addr >> 1;
+	int i;
+
+	CDBG("%s:%d",__func__,__LINE__);
+
+	/* Hall Offset Setting Value (Movie16_9) */
+	for(i = 0; i < ARRAY_SIZE(ois_hall_offset_video_16_9_setting); i++) {
+		rc = bu63164gwl_actuator_write_ois(ois_hall_offset_video_16_9_setting[i].type,
+			ois_hall_offset_video_16_9_setting[i].addr, ois_hall_offset_video_16_9_setting[i].data);
+		if (rc < 0){
+			CDBG("msm_camera_i2c_txdata faild No.%d 0x%x\n", i, saddr);
+			return -EFAULT;
+		}
+	}
+
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_set_hall_offset_video_4_3(void)
+{
+	int32_t rc = 0;
+	uint16_t saddr = bu63164gwl_act_t.i2c_client.client->addr >> 1;
+	int i;
+
+	CDBG("%s:%d",__func__,__LINE__);
+
+	/* Hall Offset Setting Value (Movie4_3) */
+	for(i = 0; i < ARRAY_SIZE(ois_hall_offset_video_4_3_setting); i++) {
+		rc = bu63164gwl_actuator_write_ois(ois_hall_offset_video_4_3_setting[i].type,
+			ois_hall_offset_video_4_3_setting[i].addr, ois_hall_offset_video_4_3_setting[i].data);
+		if (rc < 0){
+			CDBG("msm_camera_i2c_txdata faild No.%d 0x%x\n", i, saddr);
+			return -EFAULT;
+		}
+	}
+
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_set_limiter(void)
+{
+	int32_t rc = 0;
+	uint16_t saddr = bu63164gwl_act_t.i2c_client.client->addr >> 1;
+	int i;
+
+	CDBG("%s:%d",__func__,__LINE__);
+
+	/* Limiter */
+	for(i = 0; i < ARRAY_SIZE(ois_limiter_setting); i++) {
+		rc = bu63164gwl_actuator_write_ois(ois_limiter_setting[i].type,
+			ois_limiter_setting[i].addr, ois_limiter_setting[i].data);
+		if (rc < 0){
+			CDBG("msm_camera_i2c_txdata faild No.%d 0x%x\n", i, saddr);
+			return -EFAULT;
+		}
+	}
+
+	return rc;
+}
+
+int32_t bu63164gwl_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
+							void __user *argp)
+{
+	struct msm_actuator_cfg_data cdata;
+	int32_t rc = 0;
+	uint16_t saddr = bu63164gwl_act_t.i2c_client.client->addr >> 1;
+	if (copy_from_user(&cdata,
+		(void *)argp,
+		sizeof(struct msm_actuator_cfg_data)))
+		return -EFAULT;
+	mutex_lock(a_ctrl->actuator_mutex);
+	CDBG("%s called, type %d\n", __func__, cdata.cfgtype);
+	switch (cdata.cfgtype) {
+	case CFG_SHDIAG_GET_I2C_DATA:
+		{
+			if(cdata.cfg.i2c_info.length == 3) {
+				//use this length for getting current actuator vcm values...
+				void *data;
+				unsigned char * pd;
+				data = kmalloc(cdata.cfg.i2c_info.length, GFP_KERNEL);
+				if(data == NULL){
+					return -EFAULT;
+				}
+				pd = (unsigned char*)data;
+				pd[0] = (unsigned char)((virtual_vcm_dreg & 0xFF00) >> 8);
+				pd[1] = (unsigned char)(virtual_vcm_dreg & 0x00FF);
+				pd[2] = 0;
+				CDBG("%s:%d i2c_read data=0x%02x%02x%02x\n",__func__,__LINE__,
+					 *(unsigned char *)data,*((unsigned char *)data + 1),
+					 *((unsigned char *)data +2));
+				if (copy_to_user((void *)cdata.cfg.i2c_info.data,
+					data,
+					cdata.cfg.i2c_info.length)){
+					kfree(data);
+					pr_err("%s copy_to_user error\n",__func__);
+					return -EFAULT;
+				}
+				kfree(data);
+				if (copy_to_user((void *)argp,
+					&cdata,
+					sizeof(struct msm_actuator_cfg_data)))
+				return -EFAULT;
+			}
+			else if(cdata.cfg.i2c_info.length == 4) {
+				/* mem, per */
+				uint8_t *data;
+				uint8_t read_addr[2];
+				uint8_t	sts[2];
+
+				struct i2c_msg msg[] = {
+					{
+						.flags = 0,
+					 },
+					{
+						.flags = I2C_M_RD,
+					},
+				};
+
+				data = (uint8_t *)kmalloc(cdata.cfg.i2c_info.length,
+										  GFP_KERNEL);
+				if(data == NULL){
+					return -EFAULT;
+				}
+				if (copy_from_user(data,
+					(uint8_t *)cdata.cfg.i2c_info.data,
+					cdata.cfg.i2c_info.length)){
+					kfree(data);
+					pr_err("%s copy_to_user error\n",__func__);
+					return -EFAULT;
+				}
+
+				memcpy(read_addr, (uint8_t *)data, 2);
+				msg[0].len = ARRAY_SIZE(read_addr);
+				msg[0].addr = saddr;
+				msg[0].buf =&read_addr[0];
+				msg[1].len = 2;
+				msg[1].addr = saddr;
+				msg[1].buf =&sts[0];
+				sts[0] = 0x00;
+				sts[1] = 0x00;
+				rc = i2c_transfer(a_ctrl->i2c_client.client->adapter, msg, 2);
+				if (rc < 0){
+					pr_err("msm_camera_i2c_rxdata failed 0x%x\n", saddr);
+					kfree(data);
+					return -EFAULT;
+				}
+				CDBG("msg[0].read_addr = %02x read_addr = %02x\n",
+					 read_addr[0], read_addr[1]);
+				CDBG("msg[0].len = %d addr = %02x buf = %p\n",
+					 msg[0].len, msg[0].addr, msg[0].buf);
+				CDBG("msg[1].len = %d addr = %02x buf = %p\n",
+					 msg[1].len, msg[1].addr, msg[1].buf);
+				CDBG("rc = %d : Ois i2c_read data= %02x, %02x\n",
+					 rc, sts[0],sts[1]);
+				memcpy(&data[2], sts, 2);
+				CDBG("rc = %d : debug Ois i2c_read data= %02x, %02x\n",
+					 rc, data[2],data[3]);
+
+				if (copy_to_user((uint8_t *)cdata.cfg.i2c_info.data,
+					data,
+					cdata.cfg.i2c_info.length)){
+					kfree(data);
+					pr_err("%s copy_to_user error\n",__func__);
+					return -EFAULT;
+				}
+				kfree(data);
+				if (copy_to_user((void *)argp,
+					&cdata,
+					sizeof(struct msm_actuator_cfg_data)))
+				return -EFAULT;
+
+			}
+			else if(cdata.cfg.i2c_info.length == 1) {
+				/* act */
+				uint8_t *data;
+				uint8_t	sts[2];
+
+				struct i2c_msg msg[] = {
+					{
+						.flags = 0,
+					 },
+					{
+						.flags = I2C_M_RD,
+					},
+				};
+
+				data = (uint8_t *)kmalloc(cdata.cfg.i2c_info.length,
+										  GFP_KERNEL);
+				if(data == NULL){
+					return -EFAULT;
+				}
+				if (copy_from_user(data,
+					(uint8_t *)cdata.cfg.i2c_info.data,
+					cdata.cfg.i2c_info.length)){
+					kfree(data);
+					pr_err("%s copy_to_user error\n",__func__);
+					return -EFAULT;
+				}
+
+				msg[0].len = 1;
+				msg[0].addr = saddr;
+				msg[0].buf = &sts[0];
+				msg[1].len = 1;
+				msg[1].addr = saddr;
+				msg[1].buf =&sts[0];
+				sts[0] = 0xF0;
+				rc = i2c_transfer(a_ctrl->i2c_client.client->adapter, msg, 2);
+				CDBG("msg[0].len = %d addr = %02x buf = %p\n",
+					 msg[0].len, msg[0].addr, msg[0].buf);
+				CDBG("msg[1].len = %d addr = %02x buf = %p\n",
+					 msg[1].len, msg[1].addr, msg[1].buf);
+				CDBG("rc = %d : Actuator i2c_read data= %02x\n",
+					 rc, sts[0]);
+				memcpy(&data[0], sts, 1);
+				CDBG("rc = %d : Actuator i2c_read data= %02x\n",
+					 rc, data[0]);
+
+				if (copy_to_user((uint8_t *)cdata.cfg.i2c_info.data,
+					data,
+					cdata.cfg.i2c_info.length)){
+					kfree(data);
+					pr_err("%s copy_to_user error\n",__func__);
+					return -EFAULT;
+				}
+				kfree(data);
+				if (copy_to_user((void *)argp,
+					&cdata,
+					sizeof(struct msm_actuator_cfg_data)))
+				return -EFAULT;
+
+			} else {
+				//use other length for OIS Memory or Peripheral Read....
+				void *data;
+				struct i2c_msg msgs[] = {
+					{
+						.flags = I2C_M_RD,
+						.len   = 3,
+					},
+				};
+
+				data = kmalloc(cdata.cfg.i2c_info.length, GFP_KERNEL);
+				if(data == NULL){
+					return -EFAULT;
+				}
+				CDBG("%s:%d saddr=0x%0x\n",__func__,__LINE__, saddr);
+				
+				msgs[0].len = cdata.cfg.i2c_info.length;
+				msgs[0].addr=saddr;
+				msgs[0].buf=data;
+
+				rc = i2c_transfer(a_ctrl->i2c_client.client->adapter, msgs, 1);
+				if (rc < 0){
+					CDBG("msm_camera_i2c_rxdata failed 0x%x\n", saddr);
+					kfree(data);
+					return -EFAULT;
+				}
+
+				CDBG("%s:%d i2c_read data=0x%02x\n",
+					 __func__,__LINE__,*(unsigned char *)data);
+				if (copy_to_user((void *)cdata.cfg.i2c_info.data,
+					data,
+					cdata.cfg.i2c_info.length)){
+					kfree(data);
+					pr_err("%s copy_to_user error\n",__func__);
+					return -EFAULT;
+				}
+				kfree(data);
+				if (copy_to_user((void *)argp,
+					&cdata,
+					sizeof(struct msm_actuator_cfg_data)))
+				return -EFAULT;
+
+			}
+		}
+		break;
+	case CFG_SHDIAG_SET_I2C_DATA:
+		{
+			int16_t vcm_dreg;
+			unsigned char ch[2];
+			void *data;
+			uint16_t saddr = 0x1c >> 1;
+			struct i2c_msg msg[] = {
+				{
+					.flags = 0,
+					.len = 5,
+				 },
+			};
+
+			data = kmalloc(cdata.cfg.i2c_info.length, GFP_KERNEL);
+			if(data == NULL){
+				return -EFAULT;
+			}
+			if (copy_from_user(data,
+				(void *)cdata.cfg.i2c_info.data,
+				cdata.cfg.i2c_info.length)){
+				kfree(data);
+				pr_err("%s copy_to_user error\n",__func__);
+				return -EFAULT;
+			}
+
+			if(bu63164gwl_act_status_check(a_ctrl, 10) < 0) {
+				pr_err("cannot i2c_txdata 0x%x\n", saddr);
+				kfree(data);
+				return -EFAULT;
+			}
+
+			CDBG("%s:%d i2c_write data=0x%02x%02x%02x%02x\n",
+				 __func__,__LINE__,*(unsigned char *)data,
+				 *((unsigned char *)data + 1),*((unsigned char *)data +2),
+				 *((unsigned char *)data +3));
+			
+			msg[0].len = cdata.cfg.i2c_info.length;
+			msg[0].addr=saddr;
+			msg[0].buf=data;
+
+			rc = i2c_transfer(a_ctrl->i2c_client.client->adapter, msg, 1);
+			if (rc < 0){
+				pr_err("msm_camera_i2c_txdata faild 0x%x\n", saddr);
+				kfree(data);
+				return -EFAULT;
+			}
+			if(rc > 0) {
+				rc = 0;
+				ch[0] = *((unsigned char *)data +3);
+				ch[1] = *((unsigned char *)data +4);
+				vcm_dreg = (int16_t)( (ch[0] & 0x03) << 8);
+				vcm_dreg += (int16_t) ch[1];
+				virtual_vcm_dreg = vcm_dreg;
+			}
+
+			kfree(data);
+			if (copy_to_user((void *)argp,
+				&cdata,
+				sizeof(struct msm_actuator_cfg_data)))
+			return -EFAULT;
+		}
+		break;
+	case CFG_SHDIAG_ACTUATOR_SET_TABLE:
+		{
+			uint16_t start_pos = 0, end_pos = 0, step_pos = 0, num_pos = 0;
+			uint16_t step_index = 0, search_pos = 0;
+
+			start_pos = cdata.cfg.af_adjust_info.start_pos;
+			end_pos = cdata.cfg.af_adjust_info.end_pos;
+			step_pos = cdata.cfg.af_adjust_info.step_pos;
+			num_pos = cdata.cfg.af_adjust_info.num_pos;
+			printk("%s start_pos = %d end_pos = %d num_pos = %d\n",
+					__func__, start_pos, end_pos, num_pos );
+			
+			if((start_pos < 0) && (start_pos > 0x3ff)){
+				return -EFAULT;
+			}
+			if((end_pos < 0) && (end_pos > 0x3ff)){
+				return -EFAULT;
+			}
+			if((num_pos < 0) && (num_pos > 0x80)){
+				return -EFAULT;
+			}
+			if(a_ctrl->step_position_table != NULL){
+				printk("%s free default step_position_table\n", __func__ );
+				kfree(a_ctrl->step_position_table);
+				a_ctrl->step_position_table = NULL;
+			}
+			a_ctrl->step_position_table =
+				kmalloc(sizeof(uint16_t) * num_pos, GFP_KERNEL);
+			if(a_ctrl->step_position_table == NULL){
+				pr_err("%s step_position_table kmalloc failed\n", __func__ );
+				return -EFAULT;
+			}
+			
+			for (step_index = 0; step_index < num_pos; step_index++) {
+				search_pos = start_pos + step_pos * step_index;
+				if (search_pos > end_pos) {
+					search_pos = end_pos;
+				}
+				a_ctrl->step_position_table[step_index] = search_pos;
+			}
+			
+			for (step_index = 0; step_index < num_pos; step_index++) {
+				printk("step_position_table[%d]= 0x%0x\n",
+						step_index, a_ctrl->step_position_table[step_index]);
+			}
+			a_ctrl->curr_step_pos = 0;
+			a_ctrl->curr_region_index = 0;
+			a_ctrl->total_steps = num_pos;
+			a_ctrl->region_params[0].step_bound[0] = num_pos;
+
+			if (copy_to_user((void *)cdata.cfg.af_adjust_info.p_step_position_table,
+				a_ctrl->step_position_table,
+				sizeof(uint16_t) * num_pos))
+			return -EFAULT;
+		}
+		break;
+	case CFG_SET_ACTUATOR_TABLE:
+		{
+			uint16_t lens_start, lens_end, search_point;
+			uint16_t step_index = 0;
+
+			lens_start = cdata.cfg.af_info.lens_start;
+			lens_end = cdata.cfg.af_info.lens_end;
+			search_point = cdata.cfg.af_info.search_point - 1;
+			CDBG("%s lens_start = %d lens_end = %d search_point = %d\n",
+				 __func__, lens_start, lens_end, search_point );
+			
+			if(lens_start < 0){
+				return -EFAULT;
+			}
+			if(lens_end > 0x3ff){
+				return -EFAULT;
+			}
+			if(search_point > ( lens_end - lens_start )){
+				return -EFAULT;
+			}
+			if(a_ctrl->step_position_table != NULL){
+				CDBG("%s free default step_position_table\n", __func__ );
+				kfree(a_ctrl->step_position_table);
+				a_ctrl->step_position_table = NULL;
+			}
+			a_ctrl->step_position_table =
+				kmalloc(sizeof(uint16_t) * (search_point + 1) , GFP_KERNEL);
+			if(a_ctrl->step_position_table == NULL){
+				return -EFAULT;
+			}
+			
+			a_ctrl->step_position_table[step_index++] = lens_start;
+			
+			for (; step_index <= search_point; step_index++) {
+				a_ctrl->step_position_table[step_index] = lens_start +
+									 (step_index * ( lens_end - lens_start) +
+									  search_point / 2) / search_point;
+			}
+			
+			for (step_index = 0; step_index <= search_point; step_index++) {
+				CDBG("step_position_table[%d]= 0x%0x\n", 
+					 step_index, a_ctrl->step_position_table[step_index]);
+			}
+			a_ctrl->curr_step_pos = 0;
+			a_ctrl->curr_region_index = 0;
+			a_ctrl->total_steps = search_point + 1;
+			a_ctrl->region_params[0].step_bound[0] = search_point + 1;
+		}
+		break;
+	case CFG_SET_OIS_INIT:
+		{
+			CDBG("%s CFG_SET_OIS_INIT\n", __func__);
+
+			/* TODO:ADJST */
+			bu63164gwl_ois_parameter.flg = cdata.cfg.ois_info.flg;
+			bu63164gwl_ois_parameter.curdat = cdata.cfg.ois_info.curdat;
+			bu63164gwl_ois_parameter.halofs_x = cdata.cfg.ois_info.halofs_x;
+			bu63164gwl_ois_parameter.halofs_y = cdata.cfg.ois_info.halofs_y;
+			bu63164gwl_ois_parameter.pstxof = cdata.cfg.ois_info.pstxof;
+			bu63164gwl_ois_parameter.pstyof = cdata.cfg.ois_info.pstyof;
+			bu63164gwl_ois_parameter.hx_ofs = cdata.cfg.ois_info.hx_ofs;
+			bu63164gwl_ois_parameter.hy_ofs = cdata.cfg.ois_info.hy_ofs;
+			bu63164gwl_ois_parameter.gx_ofs = cdata.cfg.ois_info.gx_ofs;
+			bu63164gwl_ois_parameter.gy_ofs = cdata.cfg.ois_info.gy_ofs;
+			bu63164gwl_ois_parameter.kgxhg = cdata.cfg.ois_info.kgxhg;
+			bu63164gwl_ois_parameter.kgyhg = cdata.cfg.ois_info.kgyhg;
+			bu63164gwl_ois_parameter.kgxg = cdata.cfg.ois_info.kgxg;
+			bu63164gwl_ois_parameter.kgyg = cdata.cfg.ois_info.kgyg;
+			bu63164gwl_ois_parameter.sfthal_x_16_9 = cdata.cfg.ois_info.sfthal_x_16_9;
+			bu63164gwl_ois_parameter.sfthal_y_16_9 = cdata.cfg.ois_info.sfthal_y_16_9;
+			bu63164gwl_ois_parameter.sfthal_x_4_3 = cdata.cfg.ois_info.sfthal_x_4_3;
+			bu63164gwl_ois_parameter.sfthal_y_4_3 = cdata.cfg.ois_info.sfthal_y_4_3;
+
+			/* init */
+			rc = bu63164gwl_actuator_set_ois_init();
+			if (rc < 0){
+				pr_err("bu63164gwl_actuator_set_ois_init faild\n");
+				rc = -EFAULT;
+			}
+
+			rc = bu63164gwl_actuator_set_hall_offset_still();
+			if (rc < 0){
+				pr_err("bu63164gwl_actuator_set_hall_offset_still faild\n");
+				rc = -EFAULT;
+			}
+
+			rc = bu63164gwl_actuator_set_limiter();
+			if (rc < 0){
+				pr_err("bu63164gwl_actuator_set_limiter faild\n");
+				rc = -EFAULT;
+			}
+
+			rc = bu63164gwl_actuator_set_ois_off();
+			if (rc < 0){
+				pr_err("bu63164gwl_actuator_set_ois_off faild\n");
+				rc = -EFAULT;
+			}
+		}
+		break;
+	case CFG_SET_OIS_MODE:
+		{
+			unsigned char	mode = 0;
+			void *data;
+			CDBG("%s CFG_SET_OIS_MODE\n", __func__);
+
+			data = kmalloc(cdata.cfg.i2c_info.length, GFP_KERNEL);
+			if(data == NULL){
+				rc = -EFAULT;
+				break;
+			}
+			if(copy_from_user(data,
+				(void *)cdata.cfg.i2c_info.data,
+				cdata.cfg.i2c_info.length)){
+				CDBG("%s copy_to_user error\n",__func__);
+				kfree(data);
+				rc = -EFAULT;
+				break;
+			}
+			memcpy(&mode, data, cdata.cfg.i2c_info.length);
+
+			switch (mode) {
+				case SHCAM_OIS_MODE_STILL_ON:
+					rc = bu63164gwl_actuator_set_ois_still();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_ois_still faild\n");
+						rc = -EFAULT;
+					}
+					break;
+
+				case SHCAM_OIS_MODE_STILL_ON_CHG:
+					rc = bu63164gwl_actuator_set_ois_off();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_ois_off faild\n");
+						rc = -EFAULT;
+					}
+					rc = bu63164gwl_actuator_set_hall_offset_still();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_hall_offset_still faild\n");
+						rc = -EFAULT;
+					}
+					rc = bu63164gwl_actuator_set_ois_still();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_ois_still faild\n");
+						rc = -EFAULT;
+					}
+					break;
+
+				case SHCAM_OIS_MODE_STILL_OFF_CHG:
+					rc = bu63164gwl_actuator_set_ois_off();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_ois_off faild\n");
+						rc = -EFAULT;
+					}
+					rc = bu63164gwl_actuator_set_hall_offset_still();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_hall_offset_still faild\n");
+						rc = -EFAULT;
+					}
+					break;
+
+				case SHCAM_OIS_MODE_VIDEO_16_9_ON:
+					rc = bu63164gwl_actuator_set_ois_video_16_9();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_ois_video_16_9 faild\n");
+						rc = -EFAULT;
+					}
+					break;
+
+				case SHCAM_OIS_MODE_VIDEO_16_9_ON_CHG:
+					rc = bu63164gwl_actuator_set_ois_off();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_ois_off faild\n");
+						rc = -EFAULT;
+					}
+					rc = bu63164gwl_actuator_set_hall_offset_video_16_9();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_hall_offset_video_16_9 faild\n");
+						rc = -EFAULT;
+					}
+					rc = bu63164gwl_actuator_set_ois_video_16_9();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_ois_video_16_9 faild\n");
+						rc = -EFAULT;
+					}
+					break;
+
+				case SHCAM_OIS_MODE_VIDEO_16_9_OFF_CHG:
+					rc = bu63164gwl_actuator_set_ois_off();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_ois_off faild\n");
+						rc = -EFAULT;
+					}
+					rc = bu63164gwl_actuator_set_hall_offset_video_16_9();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_hall_offset_video_16_9 faild\n");
+						rc = -EFAULT;
+					}
+					break;
+
+				case SHCAM_OIS_MODE_VIDEO_4_3_ON:
+					rc = bu63164gwl_actuator_set_ois_video_4_3();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_ois_video_4_3 faild\n");
+						rc = -EFAULT;
+					}
+					break;
+
+				case SHCAM_OIS_MODE_VIDEO_4_3_ON_CHG:
+					rc = bu63164gwl_actuator_set_ois_off();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_ois_off faild\n");
+						rc = -EFAULT;
+					}
+					rc = bu63164gwl_actuator_set_hall_offset_video_4_3();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_hall_offset_video_4_3 faild\n");
+						rc = -EFAULT;
+					}
+					rc = bu63164gwl_actuator_set_ois_video_4_3();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_ois_video_4_3 faild\n");
+						rc = -EFAULT;
+					}
+					break;
+
+				case SHCAM_OIS_MODE_VIDEO_4_3_OFF_CHG:
+					rc = bu63164gwl_actuator_set_ois_off();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_ois_off faild\n");
+						rc = -EFAULT;
+					}
+					rc = bu63164gwl_actuator_set_hall_offset_video_4_3();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_hall_offset_video_4_3 faild\n");
+						rc = -EFAULT;
+					}
+					break;
+
+				case SHCAM_OIS_MODE_STILL_OFF:
+				case SHCAM_OIS_MODE_VIDEO_16_9_OFF:
+				case SHCAM_OIS_MODE_VIDEO_4_3_OFF:
+					rc = bu63164gwl_actuator_set_ois_off();
+					if (rc < 0){
+						pr_err("bu63164gwl_actuator_set_ois_off faild\n");
+						rc = -EFAULT;
+					}
+					break;
+
+				default:
+					pr_err("ois mode Error (%d)\n", mode);
+					break;
+			}
+			kfree(data);
+		}
+		break;
+	case CFG_SET_ACTUATOR_INFO:
+		rc = bu63164gwl_actuator_init(a_ctrl, &cdata.cfg.set_info);
+		if (rc < 0)
+			pr_err("%s init table failed %d\n", __func__, rc);
+		break;
+
+	case CFG_SET_DEFAULT_FOCUS:
+		rc = a_ctrl->func_tbl->actuator_set_default_focus(a_ctrl,
+			&cdata.cfg.move);
+		if (rc < 0)
+			pr_err("%s move focus failed %d\n", __func__, rc);
+		break;
+
+	case CFG_MOVE_FOCUS:
+		CDBG("%s CFG_MOVE_FOCUS\n", __func__);
+		rc = a_ctrl->func_tbl->actuator_move_focus(a_ctrl,
+			&cdata.cfg.move);
+		if (rc < 0)
+			pr_err("%s move focus failed %d\n", __func__, rc);
+		break;
+
+	default:
+		break;
+	}
+	mutex_unlock(a_ctrl->actuator_mutex);
+	return rc;
+}
+
+
+int32_t bu63164gwl_actuator_i2c_probe(
+	struct i2c_client *client,
+	const struct i2c_device_id *id)
+{
+	int rc = 0;
+	struct msm_actuator_ctrl_t *act_ctrl_t = NULL;
+	CDBG("%s called\n", __func__);
+
+	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
+		pr_err("i2c_check_functionality failed\n");
+		goto probe_failure;
+	}
+
+	act_ctrl_t = (struct msm_actuator_ctrl_t *)(id->driver_data);
+	CDBG("%s client = %x\n",
+		__func__, (unsigned int) client);
+	act_ctrl_t->i2c_client.client = client;
+
+	/* Assign name for sub device */
+	snprintf(act_ctrl_t->sdev.name, sizeof(act_ctrl_t->sdev.name),
+			 "%s", act_ctrl_t->i2c_driver->driver.name);
+
+	/* Initialize sub device */
+	v4l2_i2c_subdev_init(&act_ctrl_t->sdev,
+		act_ctrl_t->i2c_client.client,
+		act_ctrl_t->act_v4l2_subdev_ops);
+
+	CDBG("%s succeeded\n", __func__);
+	return rc;
+
+probe_failure:
+	pr_err("%s failed! rc = %d\n", __func__, rc);
+	return rc;
+
+}
+
+int32_t bu63164gwl_actuator_power_up(struct msm_actuator_ctrl_t *a_ctrl)
+{
+	struct i2c_msg msg[2];
+	int32_t rc = 0;
+	uint16_t saddr;
+	int i = 0;
+
+	saddr = a_ctrl->i2c_client.client->addr >> 1;
+
+	/* transfer .bin */
+	CDBG("%s: %d\n", __func__, __LINE__);
+	msg[0].flags = 0;
+	msg[0].len = ARRAY_SIZE(bu63164gwl_act_init_fw_settings);
+	msg[0].addr = saddr;
+	msg[0].buf =&bu63164gwl_act_init_fw_settings[0];
+	rc = i2c_transfer(a_ctrl->i2c_client.client->adapter, msg, 1);
+	if (rc < 0){
+		pr_err("msm_camera_i2c_txdata faild 0x%x\n", saddr);
+		return -EFAULT;
+	}
+
+	CDBG("%s: %d\n", __func__, __LINE__);
+	/* transfer .mem */
+	msg[0].flags = 0;
+	msg[0].len = ARRAY_SIZE(bu63164gwl_act_init_mem_settings);
+	msg[0].addr = saddr;
+	msg[0].buf =&bu63164gwl_act_init_mem_settings[0];
+	rc = i2c_transfer(a_ctrl->i2c_client.client->adapter, msg, 1);
+	if (rc < 0){
+		pr_err("msm_camera_i2c_txdata faild 0x%x\n", saddr);
+		return -EFAULT;
+	}
+
+	for(i = 0; i < ARRAY_SIZE(ois_init_setting1); i++) {
+		rc = bu63164gwl_actuator_write_ois(ois_init_setting1[i].type,
+			ois_init_setting1[i].addr, ois_init_setting1[i].data);
+		if (rc < 0){
+			pr_err("msm_camera_i2c_txdata faild No.%d 0x%x\n", i, saddr);
+			return -EFAULT;
+		}
+	}
+
+	msleep(30);
+
+	for(i = 0; i < ARRAY_SIZE(ois_init_setting2); i++) {
+		rc = bu63164gwl_actuator_write_ois(ois_init_setting2[i].type,
+			ois_init_setting2[i].addr, ois_init_setting2[i].data);
+		if (rc < 0){
+			pr_err("msm_camera_i2c_txdata faild No.%d 0x%x\n", i, saddr);
+			return -EFAULT;
+		}
+	}
+
+	return rc;
+}
+
+DEFINE_MUTEX(bu63164gwl_act_mutex);
+
+static const struct i2c_device_id bu63164gwl_act_i2c_id[] = {
+	{"bu63164gwl_act", (kernel_ulong_t)&bu63164gwl_act_t},
+	{ }
+};
+static struct i2c_driver bu63164gwl_act_i2c_driver = {
+	.id_table = bu63164gwl_act_i2c_id,
+	.probe  = bu63164gwl_actuator_i2c_probe,
+	.remove = __exit_p(bu63164gwl_act_i2c_remove),
+	.driver = {
+		.name = "bu63164gwl_act",
+	},
+};
+
+static int __init bu63164gwl_act_i2c_add_driver(
+	void)
+{
+	CDBG("%s called\n", __func__);
+	return i2c_add_driver(bu63164gwl_act_t.i2c_driver);
+}
+
+long bu63164gwl_actuator_subdev_ioctl(struct v4l2_subdev *sd,
+			unsigned int cmd, void *arg)
+{
+	struct msm_actuator_ctrl_t *a_ctrl = get_actrl(sd);
+	void __user *argp = (void __user *)arg;
+	switch (cmd) {
+	case VIDIOC_MSM_ACTUATOR_CFG:
+		return bu63164gwl_actuator_config(a_ctrl, argp);
+	default:
+		return -ENOIOCTLCMD;
+	}
+}
+
+int32_t bu63164gwl_actuator_power(struct v4l2_subdev *sd, int on)
+{
+	int rc = 0;
+	struct msm_actuator_ctrl_t *a_ctrl = get_actrl(sd);
+	mutex_lock(a_ctrl->actuator_mutex);
+	if (on)
+		rc = bu63164gwl_actuator_power_up(a_ctrl);
+	else
+		rc = bu63164gwl_actuator_power_down(a_ctrl);
+	mutex_unlock(a_ctrl->actuator_mutex);
+	return rc;
+}
+
+static struct v4l2_subdev_core_ops bu63164gwl_act_subdev_core_ops= {
+	.ioctl = bu63164gwl_actuator_subdev_ioctl,
+	.s_power = bu63164gwl_actuator_power,
+};
+
+static struct v4l2_subdev_ops bu63164gwl_act_subdev_ops = {
+	.core = &bu63164gwl_act_subdev_core_ops,
+};
+
+static struct msm_actuator_ctrl_t bu63164gwl_act_t = {
+	.i2c_driver = &bu63164gwl_act_i2c_driver,
+	.act_v4l2_subdev_ops = &bu63164gwl_act_subdev_ops,
+
+	.i2c_client = {
+		.addr_type = MSM_CAMERA_I2C_BYTE_ADDR,
+	},
+	.total_steps = BU63164GWL_TOTAL_STEPS_NEAR_TO_FAR_MAX,
+	.curr_step_pos = 0,
+	.curr_region_index = 0,
+	.initial_code = 0,
+	.actuator_mutex = &bu63164gwl_act_mutex,
+
+};
+
+subsys_initcall(bu63164gwl_act_i2c_add_driver);
+MODULE_DESCRIPTION("BU63164GWL actuator");
+MODULE_LICENSE("GPL v2");
