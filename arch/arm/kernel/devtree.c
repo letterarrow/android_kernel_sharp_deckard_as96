@@ -208,6 +208,58 @@ static const void * __init arch_get_next_mach(const char *const **match)
 	return m;
 }
 
+#ifdef CONFIG_ANDROID_RAM_CONSOLE
+static struct resource ram_console_resources[] = {
+	{
+		.flags = IORESOURCE_MEM,
+	},
+};
+
+static struct platform_device ram_console_device = {
+	.name = "ram_console",
+	.id = -1,
+	.num_resources = ARRAY_SIZE(ram_console_resources),
+	.resource = ram_console_resources,
+};
+
+void __init ram_console_debug_init_mem(unsigned long start, unsigned long size)
+{
+	struct resource *res;
+
+	res = platform_get_resource(&ram_console_device, IORESOURCE_MEM, 0);
+	if (!res)
+		goto fail;
+	res->start = start;
+	res->end = res->start + size - 1;
+
+	return;
+
+fail:
+	ram_console_device.resource = NULL;
+	ram_console_device.num_resources = 0;
+	pr_err("Failed to reserve memory block for ram console\n");
+}
+
+void __init ram_console_debug_init(void)
+{
+	int err;
+
+	err =  platform_device_register(&ram_console_device);
+	if (err) {
+		pr_err("%s: ramconsole registration failed (%d)!\n", __func__, err);
+	} else {
+		pr_info("%s: ramconsole registration success!\n", __func__);
+	}
+}
+
+void __init ram_console_machine_init(void)
+{
+	pr_info("%s()\n", __func__);
+	ram_console_debug_init_mem(0x88dc0000, 0x00020000);
+	ram_console_debug_init();
+}
+#endif
+
 /**
  * setup_machine_fdt - Machine setup when an dtb was passed to the kernel
  * @dt_phys: physical address of dt blob
@@ -223,6 +275,9 @@ const struct machine_desc * __init setup_machine_fdt(unsigned int dt_phys)
 	DT_MACHINE_START(GENERIC_DT, "Generic DT based system")
 		.l2c_aux_val = 0x0,
 		.l2c_aux_mask = ~0x0,
+#ifdef CONFIG_ANDROID_RAM_CONSOLE
+		.init_machine = ram_console_machine_init,
+#endif
 	MACHINE_END
 
 	mdesc_best = &__mach_desc_GENERIC_DT;
