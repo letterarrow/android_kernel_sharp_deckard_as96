@@ -1,0 +1,299 @@
+// SPDX-License-Identifier: GPL-2.0
+#include "qcom-apq8064-v2.0.dtsi"
+#include <dt-bindings/mfd/qcom-rpm.h>
+
+/ {
+	model = "SHARP SHL22";
+	compatible = "sharp,shl22", "qcom,apq8064";
+
+	aliases {
+	};
+
+	soc {
+		rpm@108000 {
+			regulators {
+				vdd_l1_l2_l12_l18-supply = <&pm8921_s4>;
+				vdd_l24-supply = <&pm8921_s1>;
+				vdd_l25-supply = <&pm8921_s1>;
+				vdd_l26-supply = <&pm8921_s7>;
+				vdd_l27-supply = <&pm8921_s7>;
+				vdd_l28-supply = <&pm8921_s1>;
+				vdd_ncp-supply = <&pm8921_l6>;
+				vin_lvs1_3_6-supply = <&pm8921_s4>;
+				vin_lvs2-supply = <&pm8921_s1>;
+				vin_lvs4_5_7-supply = <&pm8921_s4>;
+
+				s1 {
+					regulator-always-on;
+					bias-pull-down;
+					regulator-min-microvolt = <1225000>;
+					regulator-max-microvolt = <1225000>;
+					qcom,switch-mode-frequency = <3200000>;
+				};
+
+				s2 {
+					bias-pull-down;
+					regulator-min-microvolt = <1300000>;
+					regulator-max-microvolt = <1300000>;
+					qcom,switch-mode-frequency = <1600000>;
+				};
+
+				s3 {
+					regulator-always-on;
+					bias-pull-down;
+					regulator-min-microvolt = <500000>;
+					regulator-max-microvolt = <1400000>;
+					qcom,switch-mode-frequency = <4800000>;
+				};
+
+				s4 {
+					regulator-always-on;
+					bias-pull-down;
+					regulator-min-microvolt = <1800000>;
+					regulator-max-microvolt = <1800000>;
+					qcom,switch-mode-frequency = <1600000>;
+					qcom,force-mode = <QCOM_RPM_FORCE_MODE_AUTO>;
+				};
+
+				s7 {
+					regulator-min-microvolt = <1150000>;
+					regulator-max-microvolt = <1150000>;
+					qcom,switch-mode-frequency = <3200000>;
+				};
+
+				s8 {
+					regulator-min-microvolt = <1850000>;
+					regulator-max-microvolt = <1850000>;
+					qcom,switch-mode-frequency = <3200000>;
+				};
+
+				l1 {
+					regulator-always-on;
+					bias-pull-down;
+					regulator-min-microvolt = <1050000>;
+					regulator-max-microvolt = <1050000>;
+				};
+
+				l2 {
+					bias-pull-down;
+					regulator-min-microvolt = <1200000>;
+					regulator-max-microvolt = <1200000>;
+				};
+
+				l3 {
+					regulator-always-on;
+					bias-pull-down;
+					regulator-min-microvolt = <3075000>;
+					regulator-max-microvolt = <3075000>;
+				};
+
+				l4 {
+					regulator-always-on;
+					bias-pull-down;
+					regulator-min-microvolt = <1800000>;
+					regulator-max-microvolt = <1800000>;
+				};
+
+				l5 {
+					regulator-always-on;
+					bias-pull-down;
+					regulator-min-microvolt = <2950000>;
+					regulator-max-microvolt = <2950000>;
+				};
+
+				l6 {
+					bias-pull-down;
+					regulator-min-microvolt = <2800000>;
+					regulator-max-microvolt = <2800000>;
+				};
+
+				l7 {
+					bias-pull-down;
+					regulator-min-microvolt = <1850000>;
+					regulator-max-microvolt = <2950000>;
+				};
+
+				l8 {
+					bias-pull-down;
+					regulator-min-microvolt = <2800000>;
+					regulator-max-microvolt = <2800000>;
+				};
+
+				l9 {
+					regulator-always-on;
+					bias-pull-down;
+					regulator-min-microvolt = <2850000>;
+					regulator-max-microvolt = <2850000>;
+				};
+
+				l10 {
+					bias-pull-down;
+					regulator-min-microvolt = <3000000>;
+					regulator-max-microvolt = <3000000>;
+				};
+
+				l11 {
+					bias-pull-down;
+					regulator-min-microvolt = <2800000>;
+					regulator-max-microvolt = <2800000>;
+				};
+
+				l12 {
+					bias-pull-down;
+					regulator-min-microvolt = <1100000>;
+					regulator-max-microvolt = <1100000>;
+				};
+
+				l13 {
+					regulator-min-microvolt = <2220000>;
+					regulator-max-microvolt = <2220000>;
+				};
+
+				l14 {
+					bias-pull-down;
+					regulator-min-microvolt = <1800000>;
+					regulator-max-microvolt = <1800000>;
+				};
+
+				l15 {
+					regulator-always-on;
+					bias-pull-down;
+					regulator-min-microvolt = <2850000>;
+					regulator-max-microvolt = <2850000>;
+				};
+
+				l16 {
+					bias-pull-down;
+					regulator-min-microvolt = <3000000>;
+					regulator-max-microvolt = <3000000>;
+				};
+
+				l17 {
+					bias-pull-down;
+					regulator-min-microvolt = <2000000>;
+					regulator-max-microvolt = <2000000>;
+				};
+
+				l18 {
+					bias-pull-down;
+					regulator-min-microvolt = <1200000>;
+					regulator-max-microvolt = <1200000>;
+				};
+
+				l21 {
+					bias-pull-down;
+					regulator-min-microvolt = <1900000>;
+					regulator-max-microvolt = <1900000>;
+				};
+
+				l22 {
+					bias-pull-down;
+					regulator-min-microvolt = <2850000>;
+					regulator-max-microvolt = <2850000>;
+				};
+
+				l23 {
+					bias-pull-down;
+					regulator-min-microvolt = <1800000>;
+					regulator-max-microvolt = <1800000>;
+				};
+
+				l24 {
+					bias-pull-down;
+					regulator-min-microvolt = <750000>;
+					regulator-max-microvolt = <1150000>;
+				};
+
+				l25 {
+					regulator-always-on;
+					bias-pull-down;
+					regulator-min-microvolt = <1225000>;
+					regulator-max-microvolt = <1225000>;
+				};
+
+				l26 {
+					bias-pull-down;
+					regulator-min-microvolt = <375000>;
+					regulator-max-microvolt = <1050000>;
+				};
+
+				l27 {
+					regulator-min-microvolt = <1050000>;
+					regulator-max-microvolt = <1050000>;
+				};
+
+				l28 {
+					bias-pull-down;
+					regulator-min-microvolt = <1100000>;
+					regulator-max-microvolt = <1100000>;
+				};
+
+				l29 {
+					bias-pull-down;
+					regulator-min-microvolt = <1800000>;
+					regulator-max-microvolt = <1800000>;
+				};
+
+				lvs1 {
+					bias-pull-down;
+				};
+
+				lvs2 {
+					bias-pull-down;
+				};
+
+				lvs3 {
+					bias-pull-down;
+				};
+
+				lvs4 {
+					regulator-always-on;
+					bias-pull-down;
+				};
+
+				lvs5 {
+					bias-pull-down;
+				};
+
+				lvs6 {
+					bias-pull-down;
+				};
+
+				lvs7 {
+					bias-pull-down;
+				};
+
+				usb-switch {};
+
+				hdmi-switch {};
+
+				ncp {
+					bias-pull-down;
+					regulator-min-microvolt = <1800000>;
+					regulator-max-microvolt = <1800000>;
+					qcom,switch-mode-frequency = <1600000>;
+				};
+			};
+		};
+
+		usb@12500000 {
+			status = "okay";
+			dr_mode = "otg";
+			ulpi {
+				phy {
+					v3p3-supply = <&pm8921_l3>;
+					v1p8-supply = <&pm8921_l4>;
+				};
+			};
+		};
+
+		amba {
+			sdcc1: sdcc@12400000 {
+				status = "okay";
+
+				vmmc-supply = <&pm8921_l5>;
+				vqmmc-supply = <&pm8921_s4>;
+			};
+		};
+	};
+};
