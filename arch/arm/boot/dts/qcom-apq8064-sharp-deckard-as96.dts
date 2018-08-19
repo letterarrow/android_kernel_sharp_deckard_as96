@@ -268,7 +268,6 @@
 				hdmi-switch {};
 
 				ncp {
-					bias-pull-down;
 					regulator-min-microvolt = <1800000>;
 					regulator-max-microvolt = <1800000>;
 					qcom,switch-mode-frequency = <1600000>;
