@@ -626,6 +626,8 @@
 				clocks = <&gcc GSBI7_QUP_CLK>,
 					 <&gcc GSBI7_H_CLK>;
 				clock-names = "core", "iface";
+				#address-cells = <1>;
+				#size-cells = <0>;
 				status = "disabled";
 			};
 		};
@@ -1017,7 +1019,7 @@
 		/* Temporary fixed regulator */
 		sdcc1bam:dma@12402000{
 			compatible = "qcom,bam-v1.3.0";
-			reg = <0x12402000 0x8000>;
+			reg = <0x12402000 0x2000>;
 			interrupts = <0 98 0>;
 			clocks = <&gcc SDC1_H_CLK>;
 			clock-names = "bam_clk";
@@ -1027,7 +1029,7 @@
 
 		sdcc3bam:dma@12182000{
 			compatible = "qcom,bam-v1.3.0";
-			reg = <0x12182000 0x8000>;
+			reg = <0x12182000 0x2000>;
 			interrupts = <0 96 0>;
 			clocks = <&gcc SDC3_H_CLK>;
 			clock-names = "bam_clk";
@@ -1037,7 +1039,7 @@
 
 		sdcc4bam:dma@121c2000{
 			compatible = "qcom,bam-v1.3.0";
-			reg = <0x121c2000 0x8000>;
+			reg = <0x121c2000 0x2000>;
 			interrupts = <0 95 0>;
 			clocks = <&gcc SDC4_H_CLK>;
 			clock-names = "bam_clk";
