@@ -3,6 +3,20 @@
 #include <dt-bindings/mfd/qcom-rpm.h>
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/pinctrl/qcom,pmic-mpp.h>
+#include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
+#include <dt-bindings/soc/qcom,gsbi.h>
+
+&pm8921_gpio {
+	vibrator_gpio: vibrator-gpio {
+		pins = "gpio13";
+		function = "normal";
+		bias-disable;
+		output-low;
+		power-source = <PM8921_GPIO_S4>;
+		qcom,drive-strength = <PMIC_GPIO_STRENGTH_LOW>;
+		drive-push-pull;
+	};
+};
 
 &pm8921_mpps {
 	ext_5v_en: ext-5v-en {
@@ -10,6 +24,50 @@
 		function = "digital";
 		output-low;
 		power-source = <PM8921_MPP_S4>;
+	};
+};
+
+&gsbi7 {
+	status = "okay";
+	qcom,mode = <GSBI_PROT_I2C>;
+};
+
+&gsbi7_i2c {
+	status = "okay";
+	clock-frequency = <384000>;
+
+	vibrator@49 {
+		compatible = "sharp,sh_vib_i2c";
+		reg = <0x49>;
+		vcc-supply = <&pm8921_l10>;
+		sw-gpio = <&pm8921_gpio 13 GPIO_ACTIVE_HIGH>;
+		pinctrl-0 = <&vibrator_gpio>;
+		pinctrl-names = "default";
+	};
+};
+
+&i2c7_pins {
+	mux {
+		pins = "gpio82", "gpio83", "gsbi7_3d_cam", "gsbi7_3d_cam_wacr";
+		function = "gsbi7_cam_i2c";
+	};
+
+	pinconf {
+		pins = "gpio82", "gpio83";
+		drive-strength = <2>;
+		bias-disable;
+	};
+};
+
+&i2c7_pins_sleep {
+	mux {
+		pins = "gpio82", "gpio83", "gsbi7_3d_cam", "gsbi7_3d_cam_wacr";
+		function = "gsbi7_cam_i2c";
+	};
+	pinconf {
+		pins = "gpio82", "gpio83";
+		drive-strength = <2>;
+		bias-disable;
 	};
 };
 

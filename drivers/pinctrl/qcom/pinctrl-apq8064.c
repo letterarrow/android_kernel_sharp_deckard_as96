@@ -116,6 +116,9 @@ static const struct pinctrl_pin_desc apq8064_pins[] = {
 	PINCTRL_PIN(93, "SDC3_CLK"),
 	PINCTRL_PIN(94, "SDC3_CMD"),
 	PINCTRL_PIN(95, "SDC3_DATA"),
+
+	PINCTRL_PIN(96, "GSBI7_3D_CAM"),
+	PINCTRL_PIN(97, "GSBI7_3D_CAM_WACR"),
 };
 
 #define DECLARE_APQ_GPIO_PINS(pin) static const unsigned int gpio##pin##_pins[] = { pin }
@@ -217,6 +220,9 @@ static const unsigned int sdc3_clk_pins[] = { 93 };
 static const unsigned int sdc3_cmd_pins[] = { 94 };
 static const unsigned int sdc3_data_pins[] = { 95 };
 
+static const unsigned int gsbi7_3d_cam_pins[] = { 96 };
+static const unsigned int gsbi7_3d_cam_wacr_pins[] = { 97 };
+
 #define FUNCTION(fname)					\
 	[APQ_MUX_##fname] = {				\
 		.name = #fname,				\
@@ -291,6 +297,37 @@ static const unsigned int sdc3_data_pins[] = { 95 };
 		.intr_detection_width = -1,		\
 	}
 
+#define CAM_I2C_PINGROUP(pg_name, ctl, mux, f1)		\
+	{						\
+		.name = #pg_name,			\
+		.pins = pg_name##_pins,			\
+		.npins = ARRAY_SIZE(pg_name##_pins),	\
+		.funcs = (int[]){			\
+			APQ_MUX_gpio,			\
+			APQ_MUX_##f1,			\
+		},					\
+		.nfuncs = 2,				\
+		.ctl_reg = ctl,				\
+		.io_reg = 0,				\
+		.intr_cfg_reg = 0,			\
+		.intr_status_reg = 0,			\
+		.intr_target_reg = 0,			\
+		.mux_bit = mux,				\
+		.pull_bit = -1,				\
+		.drv_bit = -1,				\
+		.oe_bit = -1,				\
+		.in_bit = -1,				\
+		.out_bit = -1,				\
+		.intr_enable_bit = -1,			\
+		.intr_status_bit = -1,			\
+		.intr_target_bit = -1,			\
+		.intr_target_kpss_val = -1,		\
+		.intr_raw_status_bit = -1,		\
+		.intr_polarity_bit = -1,		\
+		.intr_detection_bit = -1,		\
+		.intr_detection_width = -1,		\
+	}
+
 enum apq8064_functions {
 	APQ_MUX_cam_mclk,
 	APQ_MUX_codec_mic_i2s,
@@ -319,6 +356,7 @@ enum apq8064_functions {
 	APQ_MUX_gsbi7_spi_cs1,
 	APQ_MUX_gsbi7_spi_cs2,
 	APQ_MUX_gsbi7_spi_cs3,
+	APQ_MUX_gsbi7_cam_i2c,
 	APQ_MUX_gsbi_cam_i2c,
 	APQ_MUX_hdmi,
 	APQ_MUX_mi2s,
@@ -432,6 +470,9 @@ static const char * const gsbi7_spi_cs2_groups[] = {
 static const char * const gsbi7_spi_cs3_groups[] = {
 	"gpio32"
 };
+static const char * const gsbi7_cam_i2c_groups[] = {
+	"gpio82", "gpio83", "gsbi7_3d_cam", "gsbi7_3d_cam_wacr"
+};
 static const char * const gsbi_cam_i2c_groups[] = {
 	"gpio10", "gpio11", "gpio12", "gpio13"
 };
@@ -500,6 +541,7 @@ static const struct msm_function apq8064_functions[] = {
 	FUNCTION(gsbi7_spi_cs1),
 	FUNCTION(gsbi7_spi_cs2),
 	FUNCTION(gsbi7_spi_cs3),
+	FUNCTION(gsbi7_cam_i2c),
 	FUNCTION(gsbi_cam_i2c),
 	FUNCTION(hdmi),
 	FUNCTION(mi2s),
@@ -599,8 +641,8 @@ static const struct msm_pingroup apq8064_groups[] = {
 	PINGROUP(79, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA),
 	PINGROUP(80, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA),
 	PINGROUP(81, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA),
-	PINGROUP(82, NA, gsbi7, NA, NA, NA, NA, NA, NA, NA, NA),
-	PINGROUP(83, gsbi7, NA, NA, NA, NA, NA, NA, NA, NA, NA),
+	PINGROUP(82, NA, gsbi7, NA, gsbi7_cam_i2c, NA, NA, NA, NA, NA, NA),
+	PINGROUP(83, gsbi7, NA, gsbi7_cam_i2c, NA, NA, NA, NA, NA, NA, NA),
 	PINGROUP(84, NA, gsbi7, NA, NA, NA, NA, NA, NA, NA, NA),
 	PINGROUP(85, NA, NA, gsbi7, NA, NA, NA, NA, NA, NA, NA),
 	PINGROUP(86, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA),
@@ -615,6 +657,9 @@ static const struct msm_pingroup apq8064_groups[] = {
 	SDC_PINGROUP(sdc3_clk, 0x20a4, 14, 6),
 	SDC_PINGROUP(sdc3_cmd, 0x20a4, 11, 3),
 	SDC_PINGROUP(sdc3_data, 0x20a4, 9, 0),
+
+	CAM_I2C_PINGROUP(gsbi7_3d_cam, 0x20bc, 1, gsbi7_cam_i2c),
+	CAM_I2C_PINGROUP(gsbi7_3d_cam_wacr, 0x03e8, 9, gsbi7_cam_i2c),
 };
 
 #define NUM_GPIO_PINGROUPS 90
