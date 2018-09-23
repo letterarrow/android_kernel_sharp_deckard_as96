@@ -696,6 +696,16 @@ config LEDS_NIC78BX
 	  To compile this driver as a module, choose M here: the module
 	  will be called leds-nic78bx.
 
+config LEDS_SH_VIBRATOR
+	tristate "SHARP I2C Vibrator support"
+	depends on LEDS_CLASS
+	depends on I2C
+	help
+	  This option enables support for SHARP I2C Vibrator.
+		
+	  To compile this driver as a module, choose M here: the
+	  module will be called sh_vib_i2c.
+
 comment "LED Triggers"
 source "drivers/leds/trigger/Kconfig"
 

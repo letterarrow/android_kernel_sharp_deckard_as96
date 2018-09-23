@@ -41,6 +41,7 @@
 		reg = <0x49>;
 		vcc-supply = <&pm8921_l10>;
 		sw-gpio = <&pm8921_gpio 13 GPIO_ACTIVE_HIGH>;
+		linux,default-trigger = "transient";
 		pinctrl-0 = <&vibrator_gpio>;
 		pinctrl-names = "default";
 	};

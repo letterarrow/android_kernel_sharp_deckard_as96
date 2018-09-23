@@ -1,7 +1,10 @@
+#define DEBUG
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
+#include <linux/leds.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
@@ -11,31 +14,9 @@ struct sh_vib_i2c {
 	struct i2c_client	*client;
 	struct regulator	*reg_vcc;
 	struct gpio_desc 	*gpio;
-	struct work_struct	work;
-	bool				active;
+	struct led_classdev	cdev;
+	struct mutex		lock;
 };
-
-static ssize_t show_active(struct device *dev,
-	struct device_attribute *dev_attr, char *buf)
-{
-	struct sh_vib_i2c *sh_vib = dev_get_drvdata(dev);
-
-	return sprintf(buf, "sh_vib_i2c: active = %d\n", sh_vib->active);
-}
-static ssize_t store_active(struct device *dev,
-	struct device_attribute *dev_attr, const char *buf, size_t count)
-{
-	int active = 0;	
-	struct sh_vib_i2c *sh_vib = dev_get_drvdata(dev);
-	
-	sscanf(buf, "%d", &active);
-
-	sh_vib->active = active;
-	schedule_work(&sh_vib->work);
-
-	return count;
-}
-static DEVICE_ATTR(active, S_IRUGO | S_IWUSR, show_active, store_active);
 
 int sh_vib_i2c_write(struct i2c_client *client,
 					u8 reg, u8 data)
@@ -62,17 +43,22 @@ int sh_vib_i2c_write(struct i2c_client *client,
 	return rc;
 }
 
-static int sh_vib_i2c_set(struct sh_vib_i2c *sh_vib, bool on)
+static int sh_vib_i2c_set_blocking(struct led_classdev *led_cdev,
+							enum led_brightness brightness)
 {
+	struct sh_vib_i2c *sh_vib = container_of(led_cdev, struct sh_vib_i2c, cdev);
 	struct i2c_client *client = sh_vib->client;
 	int rc;
-	if (on) {
+
+	mutex_lock(&sh_vib->lock);
+	if (brightness) {
 		pr_debug("sh_vib_i2c: vibrator becomes on.\n");
 		if (!regulator_is_enabled(sh_vib->reg_vcc)) {
 			pr_debug("sh_vib_i2c: regulator is disabled.\n");
 			rc = regulator_enable(sh_vib->reg_vcc);
 			if (rc) {
 				dev_err(&client->dev, "enabling regulator is failed.\n");
+				mutex_unlock(&sh_vib->lock);
 				return -1;
 			}
 			pr_debug("sh_vib_i2c: regulator becomes enabled.\n");
@@ -84,6 +70,8 @@ static int sh_vib_i2c_set(struct sh_vib_i2c *sh_vib, bool on)
 		if ((sh_vib_i2c_write(client, 0x01, 0x07) < 0) ||
 			(sh_vib_i2c_write(client, 0x02, 0x0f) < 0)) {
 			dev_err(&client->dev, "sh_vib_i2c_write is failed.\n");
+			regulator_disable(sh_vib->reg_vcc);
+			mutex_unlock(&sh_vib->lock);
 			return -1;
 		}
 		
@@ -96,7 +84,7 @@ static int sh_vib_i2c_set(struct sh_vib_i2c *sh_vib, bool on)
 
 		if (regulator_is_enabled(sh_vib->reg_vcc)) {
 			pr_debug("sh_vib_i2c: regulator is enabled.\n");
-			usleep_range(30000, 31000);
+			msleep(30);
 			regulator_disable(sh_vib->reg_vcc);
 			pr_debug("sh_vib_i2c: regulator becomes disabled.\n");
 		} else {
@@ -104,20 +92,21 @@ static int sh_vib_i2c_set(struct sh_vib_i2c *sh_vib, bool on)
 		}
 	}
 
+	mutex_unlock(&sh_vib->lock);
+
 	return 0;
 }
 
-static void sh_vib_i2c_work_handler(struct work_struct *work)
+static enum led_brightness sh_vib_i2c_get(struct led_classdev *cled)
 {
-	struct sh_vib_i2c *sh_vib = container_of(work, struct sh_vib_i2c, work);
-
-	sh_vib_i2c_set(sh_vib, sh_vib->active);
+	return cled->brightness;
 }
 
 static int sh_vib_i2c_probe(struct i2c_client *client, 
 							const struct i2c_device_id *id)
 {
 	struct sh_vib_i2c *sh_vib;
+	struct device_node *np = client->dev.of_node;
 	int rc;
 
 	sh_vib = devm_kzalloc(&client->dev, sizeof(*sh_vib), GFP_KERNEL);
@@ -138,10 +127,23 @@ static int sh_vib_i2c_probe(struct i2c_client *client,
 		dev_err(&client->dev, "Getting GPIO is failed.\n");
 		return -1;
 	}
-	
-	INIT_WORK(&sh_vib->work, sh_vib_i2c_work_handler);
 
-	device_create_file(&client->dev, &dev_attr_active);
+	mutex_init(&sh_vib->lock);
+
+	sh_vib->cdev.name = of_get_property(np, "label", NULL) ? : np->name;
+	sh_vib->cdev.brightness = LED_OFF;
+	sh_vib_i2c_set_blocking(&sh_vib->cdev, LED_OFF);
+	sh_vib->cdev.max_brightness = LED_ON;
+	sh_vib->cdev.brightness_set_blocking = sh_vib_i2c_set_blocking;
+	sh_vib->cdev.brightness_get = sh_vib_i2c_get;
+	sh_vib->cdev.default_trigger = 
+		of_get_property(np, "linux,default-trigger", NULL);
+
+	rc = devm_led_classdev_register(&client->dev, &sh_vib->cdev);
+	if (rc) {
+		dev_err(&client->dev, "Registration of led is failed.\n");
+		return rc;
+	}
 
 	return 0;
 }

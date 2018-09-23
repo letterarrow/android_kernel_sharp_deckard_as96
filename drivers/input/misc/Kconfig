@@ -871,13 +871,4 @@ config INPUT_HISI_POWERKEY
 	  To compile this driver as a module, choose M here: the
 	  module will be called hisi_powerkey.
 
-config INPUT_SH_VIBRATOR
-	tristate "SHARP I2C Vibrator support"
-	depends on I2C
-	help
-	  Say Y to enable support for SHARP I2C Vibrator.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called sh_vib_i2c.
-
 endif
